@@ -1,0 +1,33 @@
+# Environment / secrets
+.env
+.env.*
+*.key
+*token*
+!**/data/manifest.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Data and model artifacts (large / not meant for git)
+data/raw/
+data/interim/
+checkpoints/
+*.safetensors
+*.bin
+*.pt
+*.ckpt
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/

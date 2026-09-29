@@ -1,0 +1,10 @@
+{"context": "User asked: what's the weather like in Austin right now?", "options": ["get_weather", "set_reminder"], "target": "get_weather"}
+{"context": "User asked: remind me to call mom tomorrow at 6pm", "options": ["get_weather", "set_reminder"], "target": "set_reminder"}
+{"context": "User said: thanks, that's all I needed", "options": ["get_weather", "set_reminder"], "target": null}
+{"context": "User asked: search for flights from SFO to JFK next Friday", "options": ["search_flights", "get_weather"], "target": "search_flights"}
+{"context": "User asked: what's 17 times 24?", "options": ["get_weather", "set_reminder"], "target": null}
+{"context": "User asked: play some jazz music", "options": ["play_music", "get_weather"], "target": "play_music"}
+{"context": "User asked: cancel my 6pm reminder about calling mom", "options": ["set_reminder", "cancel_reminder"], "target": "cancel_reminder"}
+{"context": "User asked: tell me a joke", "options": ["get_weather", "search_flights"], "target": null}
+{"context": "User asked: book the cheapest flight from the search results", "options": ["search_flights", "book_flight"], "target": "book_flight"}
+{"context": "User asked: what's the weather in a city I haven't mentioned, you decide", "options": ["get_weather"], "target": null}

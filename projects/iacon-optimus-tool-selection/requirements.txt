@@ -1,0 +1,17 @@
+# Core pipeline (config, data, model, train)
+# REWRITTEN Sept 28: target is Laya (RLCD-trained decision model), not a
+# causal LLM fine-tuned with SFT — see docs/decisions.md. transformers/torch
+# are still needed since Laya's encoder is ModernBERT-based; trl/peft/
+# bitsandbytes are dropped, they're SFT/causal-LM-specific and don't apply
+# to Laya's architecture or RLCD's training procedure.
+pydantic>=2.6
+torch>=2.3
+transformers>=4.44
+laya>=0.3.21
+
+# Testing
+pytest>=8.0
+
+# Not yet added: whatever RLCD actually needs beyond torch (a proper-scoring-
+# rule implementation, etc.) — pending the official Laya fine-tuning
+# reference, see schema.py's module docstring caveat.
