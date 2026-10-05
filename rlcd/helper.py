@@ -1,7 +1,13 @@
 import os
-from dotenv import load_dotenv
+import json
+import time
 import datasets
+from dotenv import load_dotenv
 from huggingface_hub import login
+from typing import Any, Dict, List
+import torch.nn as nn
+from safetensors.torch import save_file
+from transformers import AutoTokenizer
 
 load_dotenv()
 
@@ -39,3 +45,74 @@ def load_dataset(dataset_name=None):
 
     return dataset
 
+def save_rolling_checkpoint(
+    model: nn.Module,
+    tok: AutoTokenizer,
+    output_dir: str,
+    epoch: int,
+    total_epochs: int,
+    avg_loss: float,
+) -> str:
+    """Save a rolling intermediate checkpoint (checkpoint_latest)."""
+    ckpt_dir = os.path.join(output_dir, "checkpoint_latest")
+    os.makedirs(ckpt_dir, exist_ok=True)
+
+    base_model = model.module if hasattr(model, "module") else model
+    sd = {k: v.half().contiguous().cpu() for k, v in base_model.state_dict().items()}
+    save_file(sd, os.path.join(ckpt_dir, "model.safetensors"))
+
+    if hasattr(base_model, "encoder") and hasattr(base_model.encoder, "config"):
+        base_model.encoder.config.save_pretrained(os.path.join(ckpt_dir, "encoder"))
+
+    tok.save_pretrained(os.path.join(ckpt_dir, "tokenizer"))
+
+    meta = {
+        "epoch": epoch,
+        "total_epochs": total_epochs,
+        "avg_loss": avg_loss,
+        "timestamp": time.time(),
+    }
+    with open(os.path.join(ckpt_dir, "checkpoint_meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+
+    return ckpt_dir
+
+
+def save_final_model(
+    model: nn.Module,
+    tok: AutoTokenizer,
+    cfg: Dict[str, Any],
+    output_dir: str,
+    fitted_temperatures: List[float],
+) -> str:
+    """Export the fully fine-tuned model package in Laya Agent format.
+
+    Creates:
+        - model.safetensors
+        - encoder/
+        - tokenizer/
+        - rl_agent_config.json (with updated temperatures, fine_tuned=True)
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    base_model = model.module if hasattr(model, "module") else model
+
+    # Save weights
+    sd = {k: v.half().contiguous().cpu() for k, v in base_model.state_dict().items()}
+    save_file(sd, os.path.join(output_dir, "model.safetensors"))
+
+    # Save encoder config and tokenizer
+    if hasattr(base_model, "encoder") and hasattr(base_model.encoder, "config"):
+        base_model.encoder.config.save_pretrained(os.path.join(output_dir, "encoder"))
+    tok.save_pretrained(os.path.join(output_dir, "tokenizer"))
+
+    # Update and save agent config
+    cfg_copy = dict(cfg)
+    cfg_copy["fine_tuned"] = True
+    cfg_copy["model_name"] = os.path.basename(os.path.normpath(output_dir))
+    cfg_copy["temperature"] = fitted_temperatures
+    cfg_copy.pop("temperature_by_options", None)
+
+    with open(os.path.join(output_dir, "rl_agent_config.json"), "w") as f:
+        json.dump(cfg_copy, f, indent=2)
+
+    return output_dir
