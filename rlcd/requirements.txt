@@ -7,3 +7,7 @@ laya>=0.1.6
 transformers>=4.48.0
 safetensors
 torch
+
+# For GPU
+# torchvision
+# torchaudio --index-url https://download.pytorch.org/whl/cu121

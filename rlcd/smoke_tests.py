@@ -265,14 +265,14 @@ class TrainingSmokeTests:
             return False
 
     def test_train(self):
-        print("\n=== Smoke test: LayaRLTrainer.train ===")
+        print("\n=== Smoke test: RLTrainer.train ===")
         try:
-            from training import LayaRLTrainer
-            assert callable(LayaRLTrainer.train)
-            print("PASS: LayaRLTrainer.train exists.")
+            from training import RLTrainer
+            assert callable(RLTrainer.train)
+            print("PASS: RLTrainer.train exists.")
             return True
         except Exception as e:
-            print(f"FAIL: LayaRLTrainer.train raised {type(e).__name__}: {e}")
+            print(f"FAIL: RLTrainer.train raised {type(e).__name__}: {e}")
             return False
 
     def run_all(self):
@@ -287,20 +287,6 @@ class TrainingSmokeTests:
             print(f"{name}: {'PASS' if passed else 'FAIL'}")
         return all(results.values())
 
-
-# if __name__ == "__main__":
-#     print("Starting comprehensive smoke tests...")
-#     helper_success = HelperSmokeTests().run_all()
-#     laya_success = LayaSmokeTests().run_all()
-#     processing_success = ProcessingSmokeTests().run_all()
-#     rl_success = TrainingSmokeTests().run_all()
-    
-#     final_success = helper_success and laya_success and processing_success and rl_success
-    
-#     print("\n===============================")
-#     print(f"FINAL RESULT: {'ALL PASS' if final_success else 'SOME FAILURES'}")
-#     print("===============================")
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run smoke tests for RLCD components.")
     parser.add_argument("--helper", action="store_true", help="Run smoke tests for helper.py")
@@ -311,9 +297,9 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
+    # If no flags are provided, run all by default
     if not (args.helper or args.laya or args.processing or args.training or args.all):
-        parser.print_help()
-        sys.exit(1)
+        args.all = True
 
     all_success = True
     successes = {}
@@ -349,7 +335,7 @@ if __name__ == "__main__":
         print(f"FINAL RESULT: {'SOME FAILURES'}")
         print(f"Failures:")
         
-        for k, v in successes:
+        for k, v in successes.items():
             print(f"-----{k}: {v}")
 
     print("===============================")

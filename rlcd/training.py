@@ -2,10 +2,7 @@
 
 Implements the RL training pipeline based on the Laya 2xT4 Kaggle fine-tuning
 methodology (https://github.com/NandhaKishorM/laya/blob/main/notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb):
-    - Group Relative Policy Optimization (GRPO) logit exploration with
-      zero-mean projected Gaussian noise.
-    - Strictly proper scoring reward (w_sph spherical score + w_rps ranked
-      probability score) and Brier calibration reward.
+    - Group Relative Policy Optimization (GRPO) logit exploration with zero-mean projected Gaussian noise.
     - Soft cross-entropy guidance loss + activation regularization.
     - Decoupled parameter optimization (AdamW with separate learning rates for
       the pretrained encoder and the decision head).
@@ -79,9 +76,7 @@ class RLTrainingConfig:
     act_reg_weight: float = 0.0  # Penalty on head act summary activations
 
     # Reward Strategy
-    reward_strategy: str = "proper"  # "proper" (proper scoring) or "brier"
-    w_sph: float = 0.75  # Spherical scoring weight in proper_reward
-    w_rps: float = 1.0   # Ranked probability score weight for ordinal questions
+    reward_strategy: str = "brier" 
 
     # Calibration Holdout Settings
     calib_max: int = 400
@@ -209,7 +204,7 @@ def compute_rl_step(
 # High-Level RL Trainer Class
 # ---------------------------------------------------------------------------
 
-class LayaRLTrainer:
+class RLTrainer:
     """End-to-end Reinforcement Learning Trainer for Laya models."""
 
     def __init__(
@@ -306,7 +301,7 @@ class LayaRLTrainer:
         """
         cfg = self.config
 
-        # 1. Preprocess items if not provided directly
+        # 1. Preprocess items check
         if train_items is None or calib_items is None:
             raise ValueError("Must provide 'train_items' and 'calib_items'")
 
@@ -386,8 +381,6 @@ class LayaRLTrainer:
                     ce_weight=cfg.ce_weight,
                     act_reg_weight=cfg.act_reg_weight,
                     reward_strategy=cfg.reward_strategy,
-                    w_sph=cfg.w_sph,
-                    w_rps=cfg.w_rps,
                     use_amp=use_amp,
                     custom_reward_fn=self.custom_reward_fn,
                 )
@@ -451,7 +444,7 @@ class LayaRLTrainer:
 
         # 5. Save final fine-tuned model package (rank 0 only)
         if self.rank == 0:
-            print("\nSkipping calibration. Saving final model package...")
+            print("\nSaving final model package...")
             del optimizer, scheduler
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
