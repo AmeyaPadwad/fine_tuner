@@ -1,3 +1,10 @@
+"""Data preprocessing and tensor collation for Laya RL training.
+
+Handles standardizing datasets, extracting answers and criteria,
+building [MASK] token sequences via `build_sequence`, and padding
+them into uniform PyTorch tensors for the GPU.
+"""
+
 import json
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -63,7 +70,19 @@ def prepare_dataset_for_laya(
     target_fn=None,
     scale=None,
 ):
-    """Map an entire dataset into Laya-ready rows."""
+    """Map an entire dataset into Laya-ready rows.
+
+    Applies row_to_laya_input across every row of dataset; falls back to a plain list comprehension for any other iterable of row dicts.
+
+    The original columns are left untouched.
+
+    Args:
+        dataset: A datasets.Dataset, datasets.DatasetDict, or any iterable of row dicts to convert.
+        context_fn, decision_type, options_fn, target_fn, scale: See row_to_laya_input -- forwarded unchanged to every row.
+
+    Returns:
+        The same container type as dataset (with the new Laya fields added to each row) if dataset supports .map, otherwise a plain ``list[dict]`` of Laya-ready rows.
+    """
     def _convert(row):
         return row_to_laya_input(
             row,
@@ -84,10 +103,26 @@ def prepare_dataset_for_laya(
 
 
 def prepare_xlam_for_laya(dataset):
-    """Prepare Salesforce/xlam-function-calling-60k as Laya "choice" inputs."""
+    """Prepare Salesforce/xlam-function-calling-60k as Laya "choice" inputs.
+
+    Args:
+        dataset: The dataset object returned by helper.load_dataset.
+
+    Returns:
+        Same container type as dataset, with Laya-ready
+        context/decision_type/target/options/
+        scale fields added to each row.
+    """
 
     def _as_list(value):
-        """Return value as a parsed list, decoding it first if it's a JSON string."""
+        """Return value as a parsed list, decoding it first if it's a JSON string.
+
+        Args:
+            value (Union[str, list, Any]): The value to decode or return.
+
+        Returns:
+            list: The decoded list, or an empty list if the input is None.
+        """
         if isinstance(value, str):
             value = json.loads(value)
         return value or []
@@ -122,7 +157,22 @@ def build_training_item(
     max_len: int = 1024,
     head_max_len: int = 256,
 ) -> Optional[Dict[str, Any]]:
-    """Build a single tokenized training item from a question and its gold answer."""
+    """Build a single tokenized training item from a question and its gold answer.
+
+    Supports typed-decision questions: choice, score, noul.
+
+    Args:
+        state: Context/state dict or serialized string.
+        q: Question dict containing 'type', 'instructions', 'criteria'.
+        gold_q: Ground-truth dict containing 'probabilities' and 'label'.
+        tok: Hugging Face AutoTokenizer.
+        max_len: Maximum total token sequence length.
+        head_max_len: Maximum budget for question head & option tokens.
+
+    Returns:
+        Dict with keys (ids, markers, qtype, target, label) or None if
+        the option markers do not fit the token budget.
+    """
     t = q["type"]
     crit = q.get("criteria", {})
     probs = gold_q.get("probabilities", {})
@@ -171,7 +221,10 @@ def build_item_from_laya_row(
     max_len: int = 1024,
     head_max_len: int = 256,
 ) -> Optional[Dict[str, Any]]:
-    """Convert a row formatted by Laya.prepare_dataset_for_laya into a training item."""
+    """Convert a row formatted by Laya.prepare_dataset_for_laya into a training item.
+
+    Handles rows with 'context', 'decision_type', 'options', 'target', 'scale'.
+    """
     decision_type = row.get("decision_type", "choice")
     context = row.get("context", "")
     options = row.get("options") or []
@@ -220,7 +273,13 @@ def prepare_dataset_items(
     max_len: int = 1024,
     head_max_len: int = 256,
 ) -> List[Dict[str, Any]]:
-    """Convert an arbitrary dataset into a list of model-ready training sequences."""
+    """Convert an arbitrary dataset into a list of model-ready training sequences.
+
+    Supports:
+        1. LocalLLaMA/typed-decisions benchmark (state, questions, gold JSON strings)
+        2. Laya-prepared dataset rows (context, decision_type, options, target)
+        3. Pre-tokenized items list (ids, markers, qtype, target, label)
+    """
     items = []
     if isinstance(dataset, list) and dataset and "ids" in dataset[0] and "markers" in dataset[0]:
         return dataset
@@ -244,7 +303,22 @@ def prepare_dataset_items(
 
 
 def collate_train_batch(items: List[Dict[str, Any]], pad_id: int) -> Dict[str, torch.Tensor]:
-    """Collate variable-length tokenized items and markers into padded tensors."""
+    """Collate variable-length tokenized items and markers into padded tensors.
+
+    Args:
+        items: List of item dictionaries (ids, markers, target, qtype, label).
+        pad_id: Padding token ID from the tokenizer.
+
+    Returns:
+        Dict of padded torch.Tensors:
+            input_ids: (batch_size, max_seq_len)
+            attention_mask: (batch_size, max_seq_len)
+            marker_pos: (batch_size, max_options)
+            marker_mask: (batch_size, max_options)
+            target: (batch_size, max_options)
+            qtype: (batch_size,)
+            label: (batch_size,)
+    """
     n = len(items)
     max_l = max(len(it["ids"]) for it in items)
     kmax = max(len(it["markers"]) for it in items)

@@ -1,3 +1,10 @@
+"""Laya model loading and adaptation module.
+
+Handles downloading, caching, and building the `convaiinnovations/laya`
+model architecture. Translates raw dataset configurations into format-agnostic
+Laya inputs.
+"""
+
 import json
 import os
 from huggingface_hub import snapshot_download

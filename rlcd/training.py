@@ -215,6 +215,15 @@ class RLTrainer:
         agent_config: Optional[Dict[str, Any]] = None,
         custom_reward_fn: Optional[Callable] = None,
     ):
+        """Initialize the RL Trainer.
+
+        Args:
+            config: Hyperparameters and paths (uses defaults if None).
+            model: An optional pre-loaded model (skips checkpoint loading if provided).
+            tokenizer: An optional pre-loaded tokenizer.
+            agent_config: An optional pre-loaded configuration dictionary.
+            custom_reward_fn: A custom callable to compute rewards, overriding default strategies.
+        """
         self.config = config or RLTrainingConfig()
         self.custom_reward_fn = custom_reward_fn
 

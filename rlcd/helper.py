@@ -1,3 +1,9 @@
+"""Utility functions for RLCD fine-tuning pipeline.
+
+Provides foundational tools like Hugging Face Hub authentication, loading
+datasets, and checkpoint/model saving functions to orchestrate RL training.
+"""
+
 import os
 import json
 import time
@@ -53,7 +59,19 @@ def save_rolling_checkpoint(
     total_epochs: int,
     avg_loss: float,
 ) -> str:
-    """Save a rolling intermediate checkpoint (checkpoint_latest)."""
+    """Save a rolling intermediate checkpoint (checkpoint_latest).
+
+    Args:
+        model (nn.Module): The neural network model to save.
+        tok (AutoTokenizer): The tokenizer to save.
+        output_dir (str): Base output directory. The checkpoint will be saved in `output_dir/checkpoint_latest/`.
+        epoch (int): The current training epoch.
+        total_epochs (int): The total number of epochs planned.
+        avg_loss (float): The average loss for the current epoch.
+
+    Returns:
+        str: The path to the saved checkpoint directory.
+    """
     ckpt_dir = os.path.join(output_dir, "checkpoint_latest")
     os.makedirs(ckpt_dir, exist_ok=True)
 
@@ -87,11 +105,21 @@ def save_final_model(
 ) -> str:
     """Export the fully fine-tuned model package in Laya Agent format.
 
-    Creates:
+    Creates the required artifacts for a Laya agent to be instantly loaded for inference:
         - model.safetensors
         - encoder/
         - tokenizer/
         - rl_agent_config.json (with updated temperatures, fine_tuned=True)
+
+    Args:
+        model (nn.Module): The fully fine-tuned model.
+        tok (AutoTokenizer): The tokenizer.
+        cfg (Dict[str, Any]): The original `rl_agent_config.json` content as a dictionary.
+        output_dir (str): Directory to save the final agent package into.
+        fitted_temperatures (List[float]): The temperatures calibrated post-training for each decision type.
+
+    Returns:
+        str: The path to the final output directory.
     """
     os.makedirs(output_dir, exist_ok=True)
     base_model = model.module if hasattr(model, "module") else model

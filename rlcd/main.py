@@ -2,7 +2,6 @@ import random
 from helper import hf_login, load_dataset
 from processing import prepare_xlam_for_laya, prepare_dataset_items
 from training import RLTrainingConfig, RLTrainer
-from evaluation import evaluate_laya_benchmark
 
 #### Model variables ####
 MODEL_NAME_OR_PATH="convaiinnovations/laya"
@@ -14,12 +13,15 @@ DATASET = "Salesforce/xlam-function-calling-60k"
 DATASET_SUBSET = 100 # set to None to use full dataset
 ###########################
 
+#### Environment variables ####
+DEVICE="cpu" # Change to "cuda" if testing locally with a GPU (Requires CUDA-enabled torch)
+###############################
+
 #### Training variables ####
 EPOCHS=3
 MICRO_BATCH_SIZE=8
 GRAD_ACCUM_STEPS=4
 REWARD_STRATEGY="brier"
-DEVICE="cpu" # Change to "cuda" if testing locally with a GPU (Requires CUDA-enabled torch)
 CALIB_MAX=10 # Using 10 items for calibration for demonstration
 ############################
 
