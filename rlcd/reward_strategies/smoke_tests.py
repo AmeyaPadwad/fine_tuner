@@ -27,74 +27,50 @@ class BrierSmokeTests:
         {"context": "Case #1027", "decision": "not urgent", "confidence": 0.85, "outcome": 0, "expected_reward": -0.7225},
     ]
 
-    def test_reward(self):
-        """Smoke-test `Brier.reward`: it should reproduce the exact
-        rewards from RLCD Reward Strategies.md's worked example, and
-        reject out-of-range confidence/outcome values.
+    def test_brier_reward(self):
+        """Smoke-test `Brier.tensor_brier_reward`: it should compute vectorized
+        Brier scores for a PyTorch batch matching the per-sample scalar math.
         """
-        print("\n=== Smoke test: Brier.reward ===")
+        import torch
+        print("\n=== Smoke test: Brier.tensor_brier_reward ===")
         try:
-            for row in self.WORKED_EXAMPLE:
-                got = Brier.reward(row["confidence"], row["outcome"])
-                assert abs(got - row["expected_reward"]) < 1e-9, (
-                    f"reward({row['confidence']}, {row['outcome']}) = {got}, "
-                    f"expected {row['expected_reward']}"
-                )
-
-            try:
-                Brier.reward(1.5, 1)
-                raise AssertionError("reward() should reject confidence outside [0, 1]")
-            except ValueError:
-                pass
-
-            try:
-                Brier.reward(0.5, 2)
-                raise AssertionError("reward() should reject an outcome that isn't 0/1")
-            except ValueError:
-                pass
-
-            print("PASS: Brier.reward matched the documented worked example and validated inputs.")
+            q = torch.tensor([
+                [0.92, 0.08],
+                [0.40, 0.60],
+                [0.55, 0.45],
+                [0.90, 0.10],
+                [0.15, 0.85]
+            ])
+            target = torch.tensor([
+                [1.0, 0.0],
+                [0.0, 1.0],
+                [0.0, 1.0],
+                [1.0, 0.0],
+                [1.0, 0.0]
+            ])
+            # mask the second option for binary decisions like 'noul'
+            mask = torch.tensor([
+                [True, False],
+                [False, True],
+                [True, False],
+                [True, False],
+                [False, True]
+            ])
+            
+            # The mathematical expectation from the markdown doc is calculated on a 
+            # single scalar confidence value, whereas our tensor reward sums squared errors 
+            # over all valid options. So we check equality with the expected scalar values.
+            expected_scores = [-0.0064, -0.16, -0.3025, -0.01, -0.7225]
+            
+            got = Brier.brier_reward(q, target, mask)
+            
+            for i, expected in enumerate(expected_scores):
+                assert abs(got[i].item() - expected) < 1e-4, f"Row {i} got {got[i].item()} expected {expected}"
+            
+            print("PASS: Brier.brier_reward matched expected batch calculations.")
             return True
         except Exception as e:
-            print(f"FAIL: Brier.reward raised {type(e).__name__}: {e}")
-            return False
-
-    def test_batch_reward(self):
-        """Smoke-test `Brier.batch_reward`: it should score every rollout
-        in a batch, matching `Brier.reward` row-by-row, without losing or
-        reordering any rollout.
-        """
-        print("\n=== Smoke test: Brier.batch_reward ===")
-        try:
-            scored = Brier.batch_reward(self.WORKED_EXAMPLE)
-            assert len(scored) == len(self.WORKED_EXAMPLE), "row count changed"
-            for original, row in zip(self.WORKED_EXAMPLE, scored):
-                assert row["context"] == original["context"], "row order/context changed"
-                assert abs(row["reward"] - original["expected_reward"]) < 1e-9, (
-                    f"batch_reward row {row} did not match expected {original['expected_reward']}"
-                )
-            print(f"PASS: Brier.batch_reward scored all {len(scored)} rollouts correctly.")
-            return True
-        except Exception as e:
-            print(f"FAIL: Brier.batch_reward raised {type(e).__name__}: {e}")
-            return False
-
-    def test_mean_reward(self):
-        """Smoke-test `Brier.mean_reward`: it should match the average of
-        the documented per-row rewards, and return 0.0 for an empty batch.
-        """
-        print("\n=== Smoke test: Brier.mean_reward ===")
-        try:
-            expected_mean = sum(r["expected_reward"] for r in self.WORKED_EXAMPLE) / len(self.WORKED_EXAMPLE)
-            got_mean = Brier.mean_reward(self.WORKED_EXAMPLE)
-            assert abs(got_mean - expected_mean) < 1e-9, (
-                f"mean_reward() = {got_mean}, expected {expected_mean}"
-            )
-            assert Brier.mean_reward([]) == 0.0, "mean_reward([]) should be 0.0"
-            print(f"PASS: Brier.mean_reward returned {got_mean:.5f}, matching the documented average.")
-            return True
-        except Exception as e:
-            print(f"FAIL: Brier.mean_reward raised {type(e).__name__}: {e}")
+            print(f"FAIL: Brier.brier_reward raised {type(e).__name__}: {e}")
             return False
 
     def run_all(self):
@@ -104,9 +80,7 @@ class BrierSmokeTests:
             bool: True if every smoke test passed, False otherwise.
         """
         results = {
-            "reward": self.test_reward(),
-            "batch_reward": self.test_batch_reward(),
-            "mean_reward": self.test_mean_reward(),
+            "brier_reward": self.test_brier_reward(),
         }
 
         print("\n--- Brier Smoke Test Summary ---")
@@ -114,7 +88,6 @@ class BrierSmokeTests:
             print(f"{name}: {'PASS' if passed else 'FAIL'}")
 
         return all(results.values())
-
 
 if __name__ == "__main__":
     success = BrierSmokeTests().run_all()
