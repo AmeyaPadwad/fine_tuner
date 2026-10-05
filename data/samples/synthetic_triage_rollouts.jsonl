@@ -1,0 +1,5 @@
+{"case_id": "Case #1023", "context": "age 54, severe chest pain, shortness of breath", "decision": "urgent", "confidence": 0.92, "outcome": 1}
+{"case_id": "Case #1024", "context": "age 67, heart rate 118, systolic BP 88, chest pain, triage yellow", "decision": "not urgent", "confidence": 0.60, "outcome": 1}
+{"case_id": "Case #1025", "context": "age 34, mild ankle sprain, normal vitals", "decision": "urgent", "confidence": 0.55, "outcome": 0}
+{"case_id": "Case #1026", "context": "age 72, acute stroke symptoms, slurred speech", "decision": "urgent", "confidence": 0.90, "outcome": 1}
+{"case_id": "Case #1027", "context": "age 45, chronic back pain, no red flags", "decision": "not urgent", "confidence": 0.85, "outcome": 0}
