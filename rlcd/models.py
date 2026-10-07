@@ -15,7 +15,7 @@ from transformers import AutoTokenizer
 
 
 VALID_DECISION_TYPES = ("choice", "score", "noul")
-DEFAULT_CACHE_DIR = os.getenv("DEFAULT_CACHE_DIR") 
+DEFAULT_CACHE_DIR = os.getenv("DEFAULT_CACHE_DIR", "./.cache") 
 
 
 class Laya:

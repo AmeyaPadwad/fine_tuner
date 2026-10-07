@@ -17,6 +17,7 @@ methodology (https://github.com/NandhaKishorM/laya/blob/main/notebooks/laya_fine
 # Common libraries
 from __future__ import annotations
 from dataclasses import asdict, dataclass
+import json
 import os
 import random
 import time
@@ -297,22 +298,34 @@ class RLTrainer:
         self,
         train_items: Optional[List[Dict[str, Any]]] = None,
         calib_items: Optional[List[Dict[str, Any]]] = None,
-    ) -> str:
+        test_items: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         """Run the complete RL fine-tuning loop.
 
         Args:
-            dataset: Optional raw dataset to convert.
-            train_items: Optional pre-built training items.
-            calib_items: Optional pre-built calibration items.
+            train_items: Pre-built training items.
+            calib_items: Pre-built calibration items.
+            test_items: Optional held-out test items for before/after benchmark evaluation.
 
         Returns:
-            Output directory containing the fine-tuned Laya model.
+            Dict containing output directory and evaluation metrics.
         """
         cfg = self.config
 
         # 1. Preprocess items check
         if train_items is None or calib_items is None:
             raise ValueError("Must provide 'train_items' and 'calib_items'")
+
+        metrics = {}
+        if test_items and self.rank == 0:
+            print("\n=== Running Baseline Evaluation on Held-Out Test Set (Pre-Training) ===")
+            baseline_eval = self.evaluate(test_items)
+            metrics["baseline"] = baseline_eval
+            print(
+                f"Baseline Test Results -> Accuracy: {baseline_eval['accuracy']:.2%} | "
+                f"Mean Brier: {baseline_eval['mean_brier']:.4f} | "
+                f"ECE: {baseline_eval['ece']:.4f} (on {baseline_eval['n_items']} test items)"
+            )
 
         # In DDP, trim training items to multiple of world_size and shard
         if self.is_distributed:
@@ -473,4 +486,127 @@ class RLTrainer:
         if self.is_distributed:
             dist.destroy_process_group()
 
-        return cfg.output_dir
+        if test_items and self.rank == 0:
+            print("\n=== Running Final Evaluation on Held-Out Test Set (Post-Training) ===")
+            final_eval = self.evaluate(test_items)
+            metrics["final"] = final_eval
+            print(
+                f"Final Test Results -> Accuracy: {final_eval['accuracy']:.2%} | "
+                f"Mean Brier: {final_eval['mean_brier']:.4f} | "
+                f"ECE: {final_eval['ece']:.4f} (on {final_eval['n_items']} test items)"
+            )
+            if "baseline" in metrics:
+                b_acc, f_acc = metrics["baseline"]["accuracy"], final_eval["accuracy"]
+                b_br, f_br = metrics["baseline"]["mean_brier"], final_eval["mean_brier"]
+                b_ece, f_ece = metrics["baseline"]["ece"], final_eval["ece"]
+                print(f"Δ Improvement -> Acc: {f_acc - b_acc:+.2%} | Brier: {f_br - b_br:+.4f} | ECE: {f_ece - b_ece:+.4f}")
+
+            # Save metrics to disk
+            metrics_path = os.path.join(cfg.output_dir, "test_evaluation_metrics.json")
+            with open(metrics_path, "w") as f:
+                json.dump(metrics, f, indent=2)
+            print(f"Test evaluation metrics saved to: {metrics_path}")
+
+        return {"output_dir": cfg.output_dir, "metrics": metrics}
+
+    def evaluate(
+        self,
+        eval_items: List[Dict[str, Any]],
+        batch_size: int = 16,
+    ) -> Dict[str, Any]:
+        """Evaluate the model on held-out test items.
+        Computes Accuracy, Mean Brier Score, and Expected Calibration Error (ECE).
+        """
+        if not eval_items:
+            return {"accuracy": 0.0, "mean_brier": 0.0, "ece": 0.0, "n_items": 0}
+
+        model = self.model
+        model.eval()
+
+        correct = 0
+        total = 0
+        brier_sum = 0.0
+        confidences = []
+        accuracies = []
+        all_pred_labels = []
+        all_gold_labels = []
+
+        with torch.no_grad():
+            for b_idx in range(0, len(eval_items), batch_size):
+                chunk = eval_items[b_idx : b_idx + batch_size]
+                if not chunk:
+                    continue
+                batch = collate_train_batch(chunk, self.tokenizer.pad_token_id)
+                input_ids = batch["input_ids"].to(self.device)
+                attention_mask = batch["attention_mask"].to(self.device)
+                marker_pos = batch["marker_pos"].to(self.device)
+                marker_mask = batch["marker_mask"].to(self.device)
+                qtype = batch["qtype"].to(self.device)
+                target = batch["target"].to(self.device)
+
+                logits, _ = model(input_ids, attention_mask, marker_pos, marker_mask, qtype)
+                logits = logits.float()
+                probs = torch.softmax(logits.masked_fill(~marker_mask, -1e4), -1)
+
+                r = compute_rewards(
+                    probs,
+                    target,
+                    qtype,
+                    marker_mask,
+                    reward_strategy=self.config.reward_strategy,
+                    custom_reward_fn=self.custom_reward_fn,
+                )
+                brier_sum += r.sum().item()
+
+                pred_labels = probs.argmax(dim=-1)
+                gold_labels = target.argmax(dim=-1)
+                batch_correct = (pred_labels == gold_labels)
+                correct += batch_correct.sum().item()
+                total += len(chunk)
+
+                all_pred_labels.extend(pred_labels.cpu().tolist())
+                all_gold_labels.extend(gold_labels.cpu().tolist())
+
+                batch_conf = probs.max(dim=-1).values
+                confidences.extend(batch_conf.cpu().tolist())
+                accuracies.extend(batch_correct.cpu().tolist())
+
+        acc = (correct / total) if total > 0 else 0.0
+        mean_brier = (brier_sum / total) if total > 0 else 0.0
+
+        # Precision, Recall, F1 calculation
+        precision, recall, f1 = 0.0, 0.0, 0.0
+        if total > 0 and len(set(all_gold_labels)) > 0:
+            from sklearn.metrics import precision_recall_fscore_support
+            p_val, r_val, f1_val, _ = precision_recall_fscore_support(
+                all_gold_labels, all_pred_labels, average="weighted", zero_division=0
+            )
+            precision, recall, f1 = float(p_val), float(r_val), float(f1_val)
+
+        # ECE calculation (10 bins)
+        n_bins = 10
+        bin_boundaries = torch.linspace(0, 1, n_bins + 1)
+        ece = 0.0
+        if total > 0:
+            conf_t = torch.tensor(confidences)
+            acc_t = torch.tensor(accuracies, dtype=torch.float32)
+            for i in range(n_bins):
+                bin_lower = bin_boundaries[i]
+                bin_upper = bin_boundaries[i + 1]
+                in_bin = (conf_t > bin_lower) & (conf_t <= bin_upper) if i > 0 else (conf_t >= bin_lower) & (conf_t <= bin_upper)
+                bin_size = in_bin.sum().item()
+                if bin_size > 0:
+                    bin_acc = acc_t[in_bin].mean().item()
+                    bin_conf = conf_t[in_bin].mean().item()
+                    ece += (bin_size / total) * abs(bin_acc - bin_conf)
+
+        model.train()
+        return {
+            "accuracy": acc,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "mean_brier": mean_brier,
+            "ece": ece,
+            "n_items": total,
+        }

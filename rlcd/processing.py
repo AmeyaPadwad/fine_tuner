@@ -149,6 +149,91 @@ def prepare_xlam_for_laya(dataset):
     )
 
 
+def auto_prepare_dataset_for_laya(dataset, column_map: Optional[Dict[str, str]] = None):
+    """Automatically adapt any dataset into Laya's input format.
+
+    Prevents crashes by detecting dataset schema:
+      1. Native Laya schema: context, decision_type, options, target, scale.
+      2. xLAM schema: query, tools, answers.
+      3. Medical/Triage rollout schema: context, decision, confidence, outcome.
+      4. Generic classification/NLP schema: prompt/text/input and label/output/target.
+      5. Arbitrary custom schema via column_map.
+
+    Serializes dict or list contexts into string JSON automatically.
+    """
+    if len(dataset) == 0:
+        return dataset
+
+    sample = dataset[0] if hasattr(dataset, "__getitem__") else next(iter(dataset))
+    mapping = column_map or {}
+
+    # Case 1: Already has Laya fields
+    if "context" in sample and "target" in sample and ("options" in sample or "scale" in sample or "decision_type" in sample):
+        def _clean_laya(row):
+            ctx = row["context"]
+            if isinstance(ctx, (dict, list)):
+                ctx = json.dumps(ctx)
+            return {
+                "context": str(ctx),
+                "decision_type": row.get("decision_type", "choice"),
+                "target": row.get("target"),
+                "options": row.get("options"),
+                "scale": row.get("scale"),
+            }
+        return dataset.map(_clean_laya) if hasattr(dataset, "map") else [_clean_laya(r) for r in dataset]
+
+    # Case 2: xLAM schema (query, tools, answers)
+    if "query" in sample and "tools" in sample and "answers" in sample:
+        return prepare_xlam_for_laya(dataset)
+
+    # Case 3: Rollout schema (decision, outcome, context)
+    if "decision" in sample and "outcome" in sample:
+        def _rollout_convert(row):
+            ctx = row.get("context", "")
+            if isinstance(ctx, (dict, list)):
+                ctx = json.dumps(ctx)
+            dec = row.get("decision")
+            outcome = row.get("outcome", 1)
+            target = dec if outcome == 1 else ("not urgent" if dec == "urgent" else "urgent")
+            return {
+                "context": str(ctx),
+                "decision_type": "choice",
+                "target": target,
+                "options": ["urgent", "not urgent"],
+                "scale": None,
+            }
+        return dataset.map(_rollout_convert) if hasattr(dataset, "map") else [_rollout_convert(r) for r in dataset]
+
+    # Case 4: Generic mapped columns
+    ctx_col = mapping.get("context") or next((c for c in ("prompt", "instruction", "input", "text", "query", "context") if c in sample), None)
+    target_col = mapping.get("target") or next((c for c in ("label", "target", "output", "response", "answer") if c in sample), None)
+    options_col = mapping.get("options") or next((c for c in ("options", "choices", "candidates") if c in sample), None)
+
+    if not ctx_col or not target_col:
+        raise ValueError(
+            f"Could not auto-detect context and target columns from keys: {list(sample.keys())}. "
+            "Please provide a column_map, e.g., {'text': 'context', 'label': 'target'}."
+        )
+
+    def _generic_convert(row):
+        ctx = row[ctx_col]
+        if isinstance(ctx, (dict, list)):
+            ctx = json.dumps(ctx)
+        target = row[target_col]
+        options = row.get(options_col) if options_col else None
+        dtype = "choice" if options else "noul"
+        return {
+            "context": str(ctx),
+            "decision_type": dtype,
+            "target": target,
+            "options": options,
+            "scale": None,
+        }
+
+    return dataset.map(_generic_convert) if hasattr(dataset, "map") else [_generic_convert(r) for r in dataset]
+
+
+
 def build_training_item(
     state: Union[str, dict, list],
     q: Dict[str, Any],
