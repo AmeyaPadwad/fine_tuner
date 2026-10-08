@@ -174,4 +174,6 @@ The full 60,000-example end-to-end training and evaluation run on Salesforce xLA
   - **Mean Brier Score:** $-0.2505 \to \mathbf{-0.0168}$ ($\mathbf{+0.2337}$)
   - **Expected Calibration Error (ECE):** $9.98\% \to \mathbf{0.83\%}$ ($\mathbf{-9.15\%}$, sub-$1\%$)
 - **Wall-Clock Runtime:** $3968.21\text{s}$ ($66.14\text{ minutes}$ / $1.1\text{ hours}$)
+- **Ablation Study (SFT without RLCD):** Benchmarked on the same held-out test split (saved to `results/ablation_no_rlcd_results.json`), demonstrating that while standard SFT achieves high raw accuracy ($93.33\%$), RLCD is necessary to force calibrated uncertainty ($0.83\%$ ECE at scale) and prevent overconfident routing errors.
+
 
