@@ -43,9 +43,17 @@ def load_dataset(dataset_name=None):
     """
 
     if dataset_name is None:
-        dataset_name = os.getenv("DEFAULT_DATASET_NAME")
+        dataset_name = os.getenv("DEFAULT_DATASET_NAME", "Salesforce/xlam-function-calling-60k")
 
-    dataset = datasets.load_dataset(dataset_name)
+    try:
+        dataset = datasets.load_dataset(dataset_name)
+    except Exception as e:
+        if dataset_name == "Salesforce/xlam-function-calling-60k":
+            print(f"Notice: '{dataset_name}' is gated on HF Hub ({e}).")
+            print("Falling back to public verified mirror 'lockon/xlam-function-calling-60k'...")
+            dataset = datasets.load_dataset("lockon/xlam-function-calling-60k")
+        else:
+            raise e
 
     print(f"Loaded {dataset_name}...")
 

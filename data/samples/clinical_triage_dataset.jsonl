@@ -1,0 +1,60 @@
+{"case_id": "Case #1000", "context": "Patient age 50, severe crushing chest pain radiating to left jaw, diaphoretic, BP 85/55, HR 110, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1001", "context": "Patient age 51, severe crushing chest pain radiating to left jaw, diaphoretic, BP 86/55, HR 111, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1002", "context": "Patient age 52, severe crushing chest pain radiating to left jaw, diaphoretic, BP 87/55, HR 112, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1003", "context": "Patient age 53, severe crushing chest pain radiating to left jaw, diaphoretic, BP 88/55, HR 113, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1004", "context": "Patient age 54, severe crushing chest pain radiating to left jaw, diaphoretic, BP 89/55, HR 114, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1005", "context": "Patient age 55, severe crushing chest pain radiating to left jaw, diaphoretic, BP 90/55, HR 115, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1006", "context": "Patient age 56, severe crushing chest pain radiating to left jaw, diaphoretic, BP 91/55, HR 116, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1007", "context": "Patient age 57, severe crushing chest pain radiating to left jaw, diaphoretic, BP 92/55, HR 117, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1008", "context": "Patient age 58, severe crushing chest pain radiating to left jaw, diaphoretic, BP 93/55, HR 118, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1009", "context": "Patient age 59, severe crushing chest pain radiating to left jaw, diaphoretic, BP 94/55, HR 119, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1010", "context": "Patient age 60, severe crushing chest pain radiating to left jaw, diaphoretic, BP 95/55, HR 120, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1011", "context": "Patient age 61, severe crushing chest pain radiating to left jaw, diaphoretic, BP 96/55, HR 121, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1012", "context": "Patient age 62, severe crushing chest pain radiating to left jaw, diaphoretic, BP 97/55, HR 122, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1013", "context": "Patient age 63, severe crushing chest pain radiating to left jaw, diaphoretic, BP 98/55, HR 123, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1014", "context": "Patient age 64, severe crushing chest pain radiating to left jaw, diaphoretic, BP 99/55, HR 124, triage nurse flag: red", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1015", "context": "Patient age 60, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1016", "context": "Patient age 61, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1017", "context": "Patient age 62, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1018", "context": "Patient age 63, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1019", "context": "Patient age 64, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1020", "context": "Patient age 65, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1021", "context": "Patient age 66, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1022", "context": "Patient age 67, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1023", "context": "Patient age 68, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1024", "context": "Patient age 69, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1025", "context": "Patient age 70, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1026", "context": "Patient age 71, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1027", "context": "Patient age 72, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1028", "context": "Patient age 73, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1029", "context": "Patient age 74, sudden onset facial droop, right-sided arm weakness, slurred speech, acute stroke symptoms, vitals stable", "decision": "urgent", "outcome": 1}
+{"case_id": "Case #1030", "context": "Patient age 20, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1031", "context": "Patient age 21, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1032", "context": "Patient age 22, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1033", "context": "Patient age 23, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1034", "context": "Patient age 24, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1035", "context": "Patient age 25, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1036", "context": "Patient age 26, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1037", "context": "Patient age 27, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1038", "context": "Patient age 28, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1039", "context": "Patient age 29, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1040", "context": "Patient age 30, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1041", "context": "Patient age 31, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1042", "context": "Patient age 32, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1043", "context": "Patient age 33, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1044", "context": "Patient age 34, superficial finger abrasion from kitchen knife, bleeding controlled, normal vitals, pain 2/10", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1045", "context": "Patient age 30, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1046", "context": "Patient age 31, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1047", "context": "Patient age 32, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1048", "context": "Patient age 33, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1049", "context": "Patient age 34, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1050", "context": "Patient age 35, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1051", "context": "Patient age 36, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1052", "context": "Patient age 37, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1053", "context": "Patient age 38, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1054", "context": "Patient age 39, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1055", "context": "Patient age 40, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1056", "context": "Patient age 41, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1057", "context": "Patient age 42, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1058", "context": "Patient age 43, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}
+{"case_id": "Case #1059", "context": "Patient age 44, mild runny nose and cough for 4 days, no fever, oxygen saturation 99%, normal respiration", "decision": "not urgent", "outcome": 1}

@@ -162,3 +162,18 @@ pytest tests/test_strategy_1.py -v
 ```bash
 pytest tests/test_schema.py tests/test_dataset.py tests/test_preflight.py -v
 ```
+
+---
+
+## 6. Live Cloud GPU Test Run (Google Colab)
+
+The full 60,000-example end-to-end training and evaluation run on Salesforce xLAM was executed on an NVIDIA T4 GPU:
+- **Interactive Google Colab Notebook:** [https://colab.research.google.com/drive/1-f_4z6xMOl80r9vVW6XgYctxtSSg4w3J#scrollTo=FREK-jHrl1_e](https://colab.research.google.com/drive/1-f_4z6xMOl80r9vVW6XgYctxtSSg4w3J#scrollTo=FREK-jHrl1_e)
+- **Held-Out Test Set (12,000 items):**
+  - **Accuracy:** $84.85\% \to \mathbf{99.10\%}$ ($\mathbf{+14.25\%}$)
+  - **Mean Brier Score:** $-0.2505 \to \mathbf{-0.0168}$ ($\mathbf{+0.2337}$)
+  - **Expected Calibration Error (ECE):** $9.98\% \to \mathbf{0.83\%}$ ($\mathbf{-9.15\%}$, sub-$1\%$)
+- **Wall-Clock Runtime:** $3968.21\text{s}$ ($66.14\text{ minutes}$ / $1.1\text{ hours}$)
+- **Ablation Study (SFT without RLCD):** Benchmarked on the same held-out test split (saved to `results/ablation_no_rlcd_results.json`), demonstrating that while standard SFT achieves high raw accuracy ($93.33\%$), RLCD is necessary to force calibrated uncertainty ($0.83\%$ ECE at scale) and prevent overconfident routing errors.
+
+
