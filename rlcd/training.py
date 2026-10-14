@@ -294,6 +294,80 @@ class RLTrainer:
 
         self.model = model
 
+    def hyperparameter_sweep(
+        self,
+        train_items: List[Dict[str, Any]],
+        calib_items: List[Dict[str, Any]],
+        test_items: List[Dict[str, Any]],
+        param_grid: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Run a hyperparameter search across candidate configurations.
+        
+        Evaluates each candidate on held-out test_items and returns the best configuration.
+        """
+        print(f"\n========================================================")
+        print(f"=== Starting Hyperparameter Sweep ({len(param_grid)} trials) ===")
+        print(f"========================================================")
+
+        best_score = -float("inf")
+        best_config = None
+        best_metrics = None
+        results = []
+
+        base_config = self.config
+
+        for trial_idx, params in enumerate(param_grid, start=1):
+            print(f"\n--- Running Trial {trial_idx}/{len(param_grid)} with params: {params} ---")
+            trial_cfg_dict = base_config.to_dict()
+            trial_cfg_dict.update(params)
+            trial_cfg_dict["output_dir"] = os.path.join(base_config.output_dir, f"trial_{trial_idx}")
+            trial_config = RLTrainingConfig.from_dict(trial_cfg_dict)
+
+            trainer = RLTrainer(config=trial_config)
+            trial_result = trainer.train(
+                train_items=train_items,
+                calib_items=calib_items,
+                test_items=test_items,
+            )
+
+            final_metrics = trial_result.get("metrics", {}).get("final", {})
+            mean_brier = final_metrics.get("mean_brier", -float("inf"))
+            ece = final_metrics.get("ece", 1.0)
+            acc = final_metrics.get("accuracy", 0.0)
+
+            # Optimization criterion: Higher Brier score (closer to 0) + lower ECE
+            # Score = Mean Brier - ECE
+            combined_score = mean_brier - (0.5 * ece)
+
+            record = {
+                "trial": trial_idx,
+                "params": params,
+                "accuracy": acc,
+                "mean_brier": mean_brier,
+                "ece": ece,
+                "combined_score": combined_score,
+                "output_dir": trial_config.output_dir,
+            }
+            results.append(record)
+            print(f"Trial {trial_idx} Results: Acc: {acc:.2%} | Brier: {mean_brier:.4f} | ECE: {ece:.4f} | Combined: {combined_score:.4f}")
+
+            if combined_score > best_score:
+                best_score = combined_score
+                best_config = trial_config
+                best_metrics = record
+
+        print("\n========================================================")
+        print("=== Hyperparameter Sweep Complete: Ranked Results ===")
+        print("========================================================")
+        results.sort(key=lambda r: r["combined_score"], reverse=True)
+        for r in results:
+            print(f"Rank {r['trial']}: Score={r['combined_score']:.4f} | Acc={r['accuracy']:.2%} | Brier={r['mean_brier']:.4f} | ECE={r['ece']:.4f} | Params={r['params']}")
+
+        print(f"\nBest Configuration Found in Trial {best_metrics['trial']} with Score {best_score:.4f}:")
+        print(json.dumps(best_metrics, indent=2))
+
+        return {"best_config": best_config, "best_metrics": best_metrics, "all_results": results}
+
     def train(
         self,
         train_items: Optional[List[Dict[str, Any]]] = None,
@@ -499,7 +573,7 @@ class RLTrainer:
                 b_acc, f_acc = metrics["baseline"]["accuracy"], final_eval["accuracy"]
                 b_br, f_br = metrics["baseline"]["mean_brier"], final_eval["mean_brier"]
                 b_ece, f_ece = metrics["baseline"]["ece"], final_eval["ece"]
-                print(f"Δ Improvement -> Acc: {f_acc - b_acc:+.2%} | Brier: {f_br - b_br:+.4f} | ECE: {f_ece - b_ece:+.4f}")
+                print(f"Delta Improvement -> Acc: {f_acc - b_acc:+.2%} | Brier: {f_br - b_br:+.4f} | ECE: {f_ece - b_ece:+.4f}")
 
             # Save metrics to disk
             metrics_path = os.path.join(cfg.output_dir, "test_evaluation_metrics.json")

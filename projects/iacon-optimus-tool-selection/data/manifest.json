@@ -1,4 +1,0 @@
-{
-  "description": "Provenance and license manifest for all data used in the tool-selection project. Add one entry per data source before it is used in training or evaluation.",
-  "sources": []
-}

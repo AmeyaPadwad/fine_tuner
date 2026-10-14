@@ -7,6 +7,7 @@ them into uniform PyTorch tensors for the GPU.
 
 import json
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+import random
 
 import torch
 from transformers import AutoTokenizer
@@ -435,3 +436,45 @@ def collate_train_batch(items: List[Dict[str, Any]], pad_id: int) -> Dict[str, t
         "qtype": torch.tensor([it["qtype"] for it in items], dtype=torch.long),
         "label": torch.tensor([it["label"] for it in items], dtype=torch.long),
     }
+
+def split_dataset_items(
+    all_items: List[Dict[str, Any]],
+    test_ratio: float = 0.20,
+    calib_ratio: float = 0.10,
+    calib_max: int = 20,
+    seed: int = 42,
+):
+    """Partition items into non-overlapping train, calibration, and test splits."""
+    n_total = len(all_items)
+    if n_total < 3:
+        raise ValueError(f"Need at least 3 items to split, got {n_total}")
+
+    order = list(range(n_total))
+    random.Random(seed).shuffle(order)
+
+    n_test = max(1, int(n_total * test_ratio))
+    n_calib = min(calib_max, max(1, int(n_total * calib_ratio)))
+    n_train = n_total - n_test - n_calib
+
+    if n_train < 1:
+        # Guarantee at least 1 training item if dataset is tiny
+        n_train = 1
+        n_test = max(1, n_total - n_train - n_calib)
+
+    test_indices = order[:n_test]
+    calib_indices = order[n_test : n_test + n_calib]
+    train_indices = order[n_test + n_calib :]
+
+    test_items = [all_items[i] for i in test_indices]
+    calib_items = [all_items[i] for i in calib_indices]
+    train_items = [all_items[i] for i in train_indices]
+
+    print(
+        f"\nDataset Split Summary (Seed {seed}):\n"
+        f"  Total:       {n_total} items\n"
+        f"  Train:       {len(train_items)} items ({len(train_items)/n_total:.1%})\n"
+        f"  Calibration: {len(calib_items)} items ({len(calib_items)/n_total:.1%})\n"
+        f"  Test:        {len(test_items)} items ({len(test_items)/n_total:.1%})"
+    )
+
+    return train_items, calib_items, test_items

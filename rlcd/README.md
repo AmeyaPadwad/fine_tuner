@@ -1,336 +1,135 @@
-# LLM Fine-Tuner: Training Runtime Worker (SFT)
+# Reinforcement Learning with Calibrated Decisions (RLCD)
 
----
+## 1. The Big Picture
 
-## Table of Contents
+The `rlcd` module provides a comprehensive Reinforcement Learning (RL) fine-tuning runtime built specifically for the **Laya model family**. Its goal is to take a base decision model and optimize it to produce highly calibrated confidence scores alongside its predictions.
 
-1. [System Architecture](#system-architecture)
-2. [Job Specification Contract](#job-specification-contract)
-3. [Proposed Project Directory Structure](#proposed-project-directory-structure)
-4. [Technical Implementation Plan (Core Components)](#technical-implementation-plan-core-components)
-5. [1-Month (20-Day) Day-by-Day Execution Plan for 2 Engineers](#1-month-20-day-day-by-day-execution-plan-for-2-engineers)
-   - [Team Roles & Ownership](#team-roles--ownership)
-   - [Week 1: Core Plumbing & First Smoke Test (Days 1–5)](#week-1-core-plumbing--first-smoke-test-days-15)
-   - [Week 2: Full SFT Pipeline & Telemetry (Days 6–10)](#week-2-full-sft-pipeline--telemetry-days-610)
-   - [Week 3: Multi-Model Testing & Evaluation Matrix (Days 11–15)](#week-3-multi-model-testing--evaluation-matrix-days-1115)
-   - [Week 4: Final Polishing, Packaging & Delivery (Days 16–20)](#week-4-final-polishing-packaging--delivery-days-1620)
-6. [Daily Operating Cadence & Best Practices](#daily-operating-cadence--best-practices)
-7. [Recommended Technology Stack](#recommended-technology-stack)
+The pipeline handles the entire end-to-end process autonomously:
 
----
+1. **Loading Data**: It fetches instruction or conversational datasets from Hugging Face or local storage.
+2. **Preprocessing**: It maps raw text and dictionaries into the mathematically structured format (sequences and `[MASK]` tokens) that the Laya architecture requires, and splits them into train, calibration, and test sets.
+3. **Loading the Model**: It downloads the specified base Laya weights and configuration, dynamically assembling the neural network.
+4. **Configuring the Trainer**: It sets up a tailored RL environment with specific hyperparameters for learning rates, exploration noise, and reward strategies.
+5. **Training & Evaluation**: It evaluates pre-training baseline metrics, executes Group Relative Policy Optimization (GRPO) to fine-tune the model, fits post-training temperature calibration, and evaluates post-training performance on the held-out test set.
+6. **Saving**: It compiles the updated weights, the tokenizer, the calibrated configurations, and evaluation metrics into a production-ready Laya Agent package.
 
-## System Architecture
+## 2. How to Run This
 
-The Training Runtime Worker is a self-contained execution unit. It can run locally via CLI, in a cloud VM/container (RunPod, Modal, Lambda, AWS), or be invoked as a task runner by an orchestration queue.
+**Before running:** Make sure to install all the dependencies from `requirements.txt`.
 
-```
-                      ┌────────────────────────────┐
-                      │    Job Specification JSON   │
-                      └─────────────┬──────────────┘
-                                    │
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                        TRAINING RUNTIME WORKER                         │
-│                                                                        │
-│  [ 1. Config & Pre-flight Guard ]                                      │
-│    ├── Pydantic validation (model, dataset, hyperparameters)           │
-│    └── GPU hardware & VRAM feasibility check (prevent CUDA OOMs)       │
-│                                                                        │
-│  [ 2. Data Ingestion & Formatting Engine ]                             │
-│    ├── Format parsing: OpenAI/ShareGPT messages, Alpaca, or custom     │
-│    ├── Tokenization & Model-specific Chat Template application         │
-│    ├── Response Masking (loss calculated ONLY on assistant response)   │
-│    └── Train / Eval split creation (e.g., 90/10)                       │
-│                                                                        │
-│  [ 3. Model & PEFT Setup ]                                             │
-│    ├── Base model loader (4-bit NF4 QLoRA / 8-bit / 16-bit LoRA)       │
-│    ├── PEFT configuration (rank, alpha, target modules)                │
-│    └── Gradient checkpointing & memory optimizations                   │
-│                                                                        │
-│  [ 4. Core SFT Training Engine ]                                       │
-│    ├── Hugging Face TRL (SFTTrainer) + Accelerate                      │
-│    └── Structured Event Callback (streams JSON lines / live metrics)   │
-│                                                                        │
-│  [ 5. Post-Training, Evaluation & Export ]                             │
-│    ├── Validation loss & perplexity calculation                        │
-│    ├── LoRA adapter export (adapter_model.safetensors)                 │
-│    ├── Optional: Merge adapter with base model into 16-bit safetensors │
-│    └── Optional: Quantize to GGUF (for Ollama/llama.cpp)               │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │
-                                    ▼
-                      ┌────────────────────────────┐
-                      │     Output Artifacts       │
-                      │  ├── adapter/              │
-                      │  ├── merged_model/         │
-                      │  ├── metrics.json          │
-                      │  └── events.jsonl          │
-                      └────────────────────────────┘
+```bash
+pip install -r rlcd/requirements.txt
 ```
 
----
+_(Note: To train on a GPU, you must install a GPU-enabled version of PyTorch compatible with your CUDA version! Default installations from `requirements.txt` only install the CPU version.)_
 
-## Job Specification Contract
+The primary entry point to start the training process is `main.py`. You can run it via the command line:
 
-The worker is driven by a single, declarative JSON/YAML specification.
-
-### Example `job_config.json`:
-
-```json
-{
-  "job_id": "job_sft_20260928_01",
-  "model": {
-    "base_model_id": "Qwen/Qwen2.5-0.5B",
-    "auth_token": null,
-    "trust_remote_code": true
-  },
-  "dataset": {
-    "source_path": "data/training_data.jsonl",
-    "format": "messages",
-    "max_seq_length": 2048,
-    "eval_split_ratio": 0.1
-  },
-  "training": {
-    "method": "qlora_4bit",
-    "lora_r": 16,
-    "lora_alpha": 32,
-    "lora_dropout": 0.05,
-    "epochs": 3,
-    "batch_size": 2,
-    "gradient_accumulation_steps": 4,
-    "learning_rate": 2e-4,
-    "lr_scheduler_type": "cosine",
-    "warmup_ratio": 0.05,
-    "optimizer": "paged_adamw_8bit",
-    "gradient_checkpointing": true
-  },
-  "output": {
-    "output_dir": "outputs/run_01",
-    "save_adapter": true,
-    "merge_weights": true,
-    "export_gguf": false,
-    "logging_steps": 5
-  }
-}
+```bash
+python rlcd/main.py
 ```
 
----
+_(Note: For distributed multi-GPU training, use `torchrun --nproc_per_node=<GPUs> rlcd/main.py`)_
 
-## Proposed Project Directory Structure
+To run the ablation study comparing the base model, standard SFT (without RLCD), and RLCD fine-tuning:
 
-```
-fine-tuner/
-├── worker/
-│   ├── __init__.py
-│   ├── schema.py          # Pydantic models for JobSpec & Event schemas
-│   ├── preflight.py       # Hardware, VRAM & environment checks
-│   ├── dataset.py         # Multi-format parsing, chat template, masking
-│   ├── model.py           # Model loader (4-bit QLoRA, 16-bit LoRA, PEFT)
-│   ├── trainer.py         # SFTTrainer loop & training orchestration
-│   ├── callbacks.py       # Structured JSON progress & metrics callback
-│   ├── exporter.py        # Adapter saving, weight merging, GGUF export
-│   └── main.py            # CLI entry point (python -m worker.main)
-├── tests/
-│   ├── test_schema.py     # Schema validation tests
-│   ├── test_dataset.py    # Data formatting & masking tests
-│   ├── test_preflight.py  # VRAM estimation unit tests
-│   └── test_integration.py# Fast end-to-end 5-step mock training run
-├── examples/
-│   ├── sample_conversations.jsonl
-│   ├── sample_alpaca.jsonl
-│   └── job_config.json
-├── requirements.txt       # Dependencies
-├── Dockerfile             # Production container definition
-└── README.md
+```bash
+python rlcd/run_ablation_comparison.py
 ```
 
----
+### Variables in `main.py`
 
-## Technical Implementation Plan (Core Components)
+To customize your run, edit the top section of `main.py`:
 
-### 1. Job Specification & Validation Layer
+- `MODEL_NAME_OR_PATH`: The Hugging Face repo ID or local path of the base Laya model (e.g., `"convaiinnovations/laya"`).
+- `OUTPUT_DIR`: The directory where the final fine-tuned model and rolling checkpoints will be saved.
+- `DATASET`: The Hugging Face dataset identifier (e.g., `"Salesforce/xlam-function-calling-60k"`).
+- `DATASET_SUBSET`: An integer to limit the number of training examples (useful for quick tests), or `None` to use the full dataset.
+- `DEVICE`: Set to `"cuda"` for GPU acceleration or `"cpu"` for local testing.
+- `TEST_RATIO`, `CALIB_RATIO`, `CALIB_MAX`, `SPLIT_SEED`: Control the train, calibration, and held-out test split proportions.
 
-- Implements strict validation using Pydantic.
-- Validates hyperparameter ranges, file existence, and model IDs.
-- Provides informative error messages on misconfigurations before initializing any heavy dependencies.
+## 3. Hyperparameters
 
-### 2. Data Ingestion & Formatting Engine
+The `RLTrainingConfig` dataclass exposes the following parameters to control the training loop:
 
-- **Multi-format Support:**
-  - Standard conversational messages (`[{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]`).
-  - Instruction format / Alpaca (`instruction`, `input`, `output`).
-  - Custom column mapping for CSV/JSON files.
-- **Tokenizer & Chat Template Integration:**
-  - Uses the base model's native Jinja chat template (`tokenizer.apply_chat_template`).
-- **Response Masking (Critical for SFT):**
-  - Implements completion-only loss masking so that the gradient updates apply strictly to the model's responses, not to the user prompts or system instructions.
-- **Data Quality Profiling:**
-  - Generates token-length distributions.
-  - Warns on truncated rows and filters corrupt or empty rows.
+Sequence lengths
 
-### 3. Hardware Pre-flight & Memory Guard
+- `max_len`: Maximum total token sequence length.
+- `head_max_len`: Maximum token budget specifically allocated for the question and option strings.
+- `max_tokens_per_batch`: The absolute maximum number of tokens allowed per batch.
+- `gradient_checkpointing`: Enable gradient checkpointing to save memory at the cost of computation speed.
 
-- Checks CUDA availability, GPU device count, compute capability, and total VRAM.
-- Estimates peak memory usage before starting:
-  $$\text{Memory} \approx \text{Model Weights} + \text{LoRA Weights} + \text{Activation Memory} + \text{Optimizer State}$$
-- Automatically warns or recommends parameter adjustments (e.g., lowering batch size, enabling gradient accumulation, or switching to 4-bit QLoRA) to prevent runtime OOM crashes.
+RL & Optimization Hyperparameters
 
-### 4. Core SFT Trainer & Telemetry Streamer
+- `epochs`: Total number of training passes over the dataset.
+- `micro_batch_size`: Number of sequences processed per forward pass.
+- `grad_accum_steps`: Number of micro-batches to process before updating the model weights.
+- `group_size`: Number of noisy logit perturbations to sample per sequence (for GRPO exploration).
+- `lr_encoder`: Learning rate for the pretrained language encoder (kept very small to avoid catastrophic forgetting).
+- `lr_head`: Learning rate for the new decision head (kept higher for fast adaptation).
+- `min_lr`: The minimum learning rate to decay down to at the end of the cosine schedule.
+- `weight_decay`: The L2 penalty applied to model weights during the AdamW optimizer step.
+- `max_grad_norm`: The clipping threshold for gradient norms to prevent exploding gradients.
 
-- Integrates Hugging Face `TRL` (`SFTTrainer`) with `PEFT`.
-- Supports 4-bit NF4 QLoRA (via `bitsandbytes`) and standard 16-bit LoRA.
-- Automatically selects linear projection targets (`q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`).
-- Emits real-time JSONL telemetry (`events.jsonl`) for seamless dashboard integration:
-  ```json
-  {
-    "event": "step_completed",
-    "step": 50,
-    "total_steps": 500,
-    "train_loss": 1.42,
-    "lr": 0.0002,
-    "vram_used_gb": 6.8,
-    "eta_seconds": 320
-  }
-  ```
+Exploration Noise Schedule (sigma)
 
-### 5. Evaluation, Checkpointing & Export Engine
+- `sigma_start`: Initial exploration noise multiplier for logits at epoch 0.
+- `sigma_end`: Final exploration noise multiplier for logits at the last epoch.
 
-- Calculates final evaluation loss and perplexity on the holdout validation split.
-- Exports standard Hugging Face PEFT LoRA adapter files.
-- Supports fusing the adapter into the base model (`merge_and_unload`) to output standard 16-bit safetensors.
-- Optional GGUF export for local execution with Ollama or llama.cpp.
+Loss Weights
 
----
+- `ce_weight`: The multiplier weight for the soft cross-entropy guidance loss.
+- `act_reg_weight`: Penalty weight applied to the model's head activation summaries.
 
-## 1-Month (20-Day) Day-by-Day Execution Plan for 2 Engineers
+Reward Strategy
 
-### Team Roles & Ownership
+- `reward_strategy`: The scoring rule used to calculate rewards (set to `"brier"`).
 
-| Responsibility       | Engineer 1 (ML & Runtime Lead)                                                          | Engineer 2 (Data & Systems Lead)                                                               |
-| -------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| **Primary Domain**   | Model loading, PEFT/QLoRA, Hardware guard, Trainer loop, Checkpointing, Weight exporter | Job schema, Data parsing, Chat templates, Response masking, Telemetry/Callbacks, CLI/Packaging |
-| **Integration Goal** | Ensure memory efficiency, numerical stability, and correct adapter generation           | Ensure clean data flow, reliable job configuration, telemetry streaming, and user DX           |
+Calibration Holdout Settings
 
----
+- `calib_max`: The maximum number of dataset items to withhold from training for post-hoc temperature calibration.
+- `calib_ratio`: The percentage of the dataset to withhold for calibration if `calib_max` isn't hit first.
+- `calib_seed`: The fixed random seed used to consistently shuffle and select the calibration holdout items.
+- `calib_batch_size`: The batch size to use during the post-training calibration inference loop.
 
-### Week 1: Core Plumbing & First Smoke Test (Days 1–5)
+Environment
 
-**Milestone:** End-to-end smoke test on a toy model (data in $\rightarrow$ model trains 10 steps $\rightarrow$ adapter saved).
+- `device`: Optionally force a specific device (e.g. `"cuda"`, `"cpu"`); `None` auto-detects.
+- `fp16`: Enables Automatic Mixed Precision (AMP) to speed up math on CUDA GPUs.
+- `seed`: The random seed used for shuffling items during the training loop.
 
-- **Day 1: Project Setup & Schema Agreement (Joint)**
-  - Joint: Agree on repo structure, Git branch workflow, Python dependencies, and virtual environment.
-  - Joint: Write `worker/schema.py` defining the complete `JobSpec` Pydantic model.
-- **Day 2: Data Ingestion vs. Model Loader**
-  - **Eng 2:** Build `worker/dataset.py` to read JSONL/CSV files with conversational role/content structures.
-  - **Eng 1:** Build `worker/model.py` to load base models and tokenizers in FP16/BF16.
-- **Day 3: Tokenization & Masking vs. LoRA Integration**
-  - **Eng 2:** Implement chat template application and completion-only masking for assistant tokens.
-  - **Eng 1:** Implement PEFT `LoraConfig` and model adapter wrapping with automatic target module detection.
-- **Day 4: Integration into SFTTrainer**
-  - **Joint:** Assemble `worker/trainer.py` using Hugging Face `TRL` `SFTTrainer`. Connect dataset preprocessing with the model training loop.
-- **Day 5: Week 1 Integration Smoke Test**
-  - Run a 10-step smoke test using a micro-model (`SmolLM-135M` or `Qwen2.5-0.5B`) and sample dataset.
-  - Verify that the training step executes and outputs adapter files (`adapter_model.safetensors`).
+## 4. Directory Structure
 
----
+- **`main.py`**: The execution script that ties all components together, loads the dataset, configures the trainer, and starts the fine-tuning loop (and optional hyperparameter sweep).
+- **`training.py`**: Contains the core `RLTrainer` class, the `RLTrainingConfig` dataclass, GRPO step and loss calculation, held-out evaluation (`evaluate`), and hyperparameter search (`hyperparameter_sweep`).
+- **`processing.py`**: Handles automatic schema detection (`auto_prepare_dataset_for_laya`), dataset mapping, sequence tokenization, `[MASK]` token alignment, train/calibration/test splitting (`split_dataset_items`), and collation into padded GPU tensors.
+- **`models.py`**: Manages the downloading, caching, instantiation, and parameter-loading of the base Laya neural network architecture.
+- **`helper.py`**: Provides utility functions for Hugging Face Hub authentication, dataset loading, and exporting model checkpoints to disk.
+- **`reward_strategies/brier.py`**: Implements the vectorized Brier Score function used to calculate the reward during the RL step.
+- **`run_ablation_comparison.py`**: Runs a controlled 3-way ablation study comparing the untouched base model, standard SFT (cross-entropy only, no RLCD), and RLCD fine-tuning, saving metrics to `ablation_no_rlcd_results.json`.
+- **`smoke_tests.py`**: A comprehensive, standalone unit testing suite that verifies the mathematical and structural integrity of every module above without requiring a full training run.
 
-### Week 2: Full SFT Pipeline & Telemetry (Days 6–10)
+## 5. Data Preprocessing
 
-**Milestone:** Fully functional, standalone SFT worker with QLoRA, telemetry streaming, memory safety, and export.
+Before training, raw datasets must be transformed into the precise format Laya expects. The preprocessing pipeline operates in four phases:
 
-- **Day 6: QLoRA (4-bit NF4) & Memory Optimization**
-  - **Eng 1:** Implement `BitsAndBytesConfig` for 4-bit NF4 quantization, double quantization, and gradient checkpointing.
-  - **Eng 2:** Add support for Alpaca format (`instruction`, `input`, `output`) and arbitrary column mapping.
-- **Day 7: Pre-flight Memory Guard & Data Profiling**
-  - **Eng 1:** Build `worker/preflight.py` to check GPU VRAM and estimate memory usage to prevent OOMs.
-  - **Eng 2:** Add data quality validation: token-length histograms, empty row filtering, and truncation warnings.
-- **Day 8: Structured Telemetry & Metrics Callback**
-  - **Eng 2:** Build `worker/callbacks.py` emitting structured JSON lines (`events.jsonl`) with step, loss, lr, ETA, and VRAM.
-  - **Eng 1:** Integrate the validation loop (`eval_dataset`), computing eval loss and perplexity.
-- **Day 9: Checkpointing & Weight Exporter**
-  - **Eng 1:** Build `worker/exporter.py` for saving adapters and merging adapter weights into full 16-bit safetensors.
-  - **Eng 2:** Implement the CLI entrypoint (`python -m worker.main --config job_config.json`).
-- **Day 10: Week 2 Milestone Review**
-  - Execute a full 1-epoch fine-tuning job via CLI using a real dataset.
-  - Verify pre-flight checks, QLoRA execution, real-time JSONL logging, metrics generation, and model export.
+1. **Format Mapping**: Functions like `auto_prepare_dataset_for_laya` and `prepare_xlam_for_laya` automatically detect the dataset schema and extract the `context`, the `decision_type` (choice, score, or noul), the available `options`, and the ground-truth `target`.
+2. **Tokenization and Masking (`build_training_item` / `prepare_dataset_items`)**: The text is passed through the tokenizer. The function calculates exactly where the `[MASK]` tokens belong in the sequence to represent the available options and converts the string target into a normalized mathematical probability distribution (e.g., `[0.0, 1.0, 0.0]`).
+3. **Dataset Splitting (`split_dataset_items`)**: The tokenized items are deterministically partitioned into non-overlapping **Train**, **Calibration**, and **Test** splits.
+4. **Collation (`collate_train_batch`)**: Because sentences have different lengths, this function pads the sequences with zeros so they form perfectly rectangular PyTorch tensors, creating boolean masks so the RL loop knows to ignore the padded areas during matrix multiplication.
 
----
+## 6. The Training Loop
 
-### Week 3: Multi-Model Testing & Evaluation Matrix (Days 11–15)
+The reinforcement learning engine relies on **Group Relative Policy Optimization (GRPO)**. The loop inside `training.py` executes the following steps for every batch:
 
-**Milestone:** Stress-testing across models, formats, and hardware; edge-case hardening.
+1. **Forward Pass**: The model evaluates the padded input tokens and extracts the hidden states precisely at the `[MASK]` marker positions to generate raw prediction logits.
+2. **Exploration Noise**: Instead of relying solely on the model's raw prediction, the script clones the logits several times (`group_size`) and injects zero-mean Gaussian noise. This forces the model to explore different probability distributions around its initial guess.
+3. **Reward Calculation**: The noisy predictions are evaluated against the ground-truth target using the Brier score. A statistical "advantage" is calculated by normalizing the rewards, identifying which of the noisy guesses performed better than average.
+4. **Policy Gradient Loss**: The model's weights are penalized or rewarded based on the advantage score combined with a soft cross-entropy guidance loss, pushing the model toward accurate, calibrated probabilities.
 
-- **Day 11: Multi-Model Architecture Matrix**
-  - Test fine-tuning across major open-weight architectures:
-    1. **Qwen 2.5** (0.5B, 3B, 7B)
-    2. **Llama 3.1 / 3.2** (1B, 3B, 8B)
-    3. **Mistral / Gemma 2**
-  - Verify chat template compatibility, special token handling, and LoRA projection targeting across all families.
-- **Day 12: Diverse Dataset & Scale Testing**
-  - Test diverse datasets:
-    - Multi-turn conversations (5+ turns).
-    - Long-context samples (testing truncation at `max_seq_length`).
-    - Datasets with 1,000 to 10,000 samples to verify training stability and memory leak absence over time.
-- **Day 13: Edge Case & Fault Injection Testing**
-  - Intentionally trigger potential failure points:
-    - Corrupt or empty JSONL rows (worker must skip with warning, not crash).
-    - Oversized batch size (pre-flight must warn or handle gracefully).
-    - Missing Hugging Face tokens for gated models.
-- **Day 14: Quality & Learning Verification**
-  - Verify that the models are actually learning:
-    - Inspect training loss curves for monotonic convergence.
-    - Measure validation perplexity improvements.
-    - Run qualitative inference comparisons: compare base model vs. fine-tuned model outputs on test prompts.
-- **Day 15: Week 3 Bug Triage & Hardening**
-  - Fix any regressions, memory bottlenecks, or configuration bugs discovered during matrix testing.
-  - Finalize the list of polish items for Week 4.
+## 7. Evaluation, Calibration & Ablation Study
 
----
-
-### Week 4: Final Polishing, Packaging & Delivery (Days 16–20)
-
-**Milestone:** Production-ready containerized release with automated tests, GGUF export, and documentation.
-
-- **Day 16: Automated Test Suite (Pytest)**
-  - **Eng 2:** Write comprehensive unit tests for schema validation, dataset parsing, and event logging.
-  - **Eng 1:** Write automated integration tests running a 5-step mock training loop with assertions on generated artifacts.
-- **Day 17: Containerization (Docker)**
-  - **Eng 1:** Create an optimized `Dockerfile` with CUDA, PyTorch, bitsandbytes, and FlashAttention-2.
-  - Test container build and GPU execution locally or on a cloud GPU instance (e.g. RunPod / Modal).
-- **Day 18: High-Value Value-Add Features**
-  - **Eng 1: GGUF Quantization Export:** Add an export option that converts trained models to GGUF format (`Q4_K_M` / `Q8_0`) for instant use in Ollama / llama.cpp.
-  - **Eng 2: Hugging Face Hub Direct Push:** Add optional parameters (`hub_model_id`, `hub_token`) to upload the trained adapter directly to the Hugging Face Hub upon completion.
-- **Day 19: Documentation & Developer Experience**
-  - **Eng 2:** Write complete documentation, including configuration reference, troubleshooting guide, and example datasets.
-  - **Eng 1:** Calibrate smart defaults for hyperparameters (auto-calculating learning rate, batch size, and warmup based on dataset size).
-- **Day 20: Final Verification & Release Tagging**
-  - Run the full end-to-end verification demo:
-    - Start container $\rightarrow$ Submit job $\rightarrow$ Train $\rightarrow$ Export to GGUF $\rightarrow$ Test in Ollama.
-  - Tag release `v1.0.0` and freeze worker code for orchestration integration.
-
----
-
-## Daily Operating Cadence & Best Practices
-
-1. **Daily 10-Minute Standup:**
-   - What did I complete yesterday?
-   - What am I shipping today?
-   - Any blockers or schema/contract changes?
-2. **Contract-First Discipline:**
-   - Both engineers build strictly against `worker/schema.py`. Any schema change requires mutual agreement.
-3. **Compute Allocation Strategy:**
-   - **Weeks 1 & 2 (Local Dev):** Use lightweight models (`Qwen2.5-0.5B`, `SmolLM-135M`) that run quickly on consumer GPUs or CPU.
-   - **Week 3 (Testing):** Leverage on-demand cloud GPUs (e.g., RunPod, Lambda, or Modal A10G/A100 instances at ~$1-2/hr) for full-scale 7B/8B QLoRA testing.
-
----
-
-## Recommended Technology Stack
-
-| Component                   | Library / Tool                      | Purpose                                                               |
-| --------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
-| **Language & Schema**       | Python 3.10+, Pydantic v2           | Type-safe configuration, schema validation, and event models          |
-| **Deep Learning Core**      | PyTorch, Hugging Face Transformers  | Base model loading, tokenization, and forward/backward passes         |
-| **SFT Training Loop**       | Hugging Face TRL (`SFTTrainer`)     | Built-in chat template formatting, response masking, and SFT routines |
-| **Efficient Fine-Tuning**   | PEFT + bitsandbytes                 | LoRA adapter injection and 4-bit NF4 quantization (QLoRA)             |
-| **Hardware & Acceleration** | Accelerate, FlashAttention-2 / SDPA | Hardware abstraction, multi-GPU scaling, and memory efficiency        |
-| **Testing & Packaging**     | Pytest, Docker (CUDA base)          | Automated verification and reproducible containerized deployments     |
+- **Pre- and Post-Training Evaluation (`RLTrainer.evaluate`)**: Before and after fine-tuning, the model is evaluated on the held-out test split using **Accuracy**, **Precision**, **Recall**, **F1**, **Mean Brier Score**, and 10-bin **Expected Calibration Error (ECE)**. Results and improvement deltas are saved to `test_evaluation_metrics.json`.
+- **Temperature Calibration**: Post-training, the held-out calibration split is used to fit optimal temperature scaling parameters per decision type via L-BFGS before exporting the final model package.
+- **Hyperparameter Sweep (`RLTrainer.hyperparameter_sweep`)**: Supports evaluating a grid of candidate hyperparameters (`run_sweep=True` in `main.py`) and ranking trials by a combined Brier and ECE score.
+- **Ablation Study (`run_ablation_comparison.py`)**: Benchmarks the untouched base model against standard SFT (pure cross-entropy) and RLCD Strategy 1 on a 150-example slice to isolate the calibration and accuracy gains of RLCD.
