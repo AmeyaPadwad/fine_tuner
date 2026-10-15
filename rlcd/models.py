@@ -315,17 +315,20 @@ class OpenDecision:
 # ===========================================================================
 
 class Typical:
-    """Loader for the `Typical` (Oz Labs) open decision model."""
+    """Loader for the `Typical` (Oz Labs, e.g. `OzLabs/typical-small`) open decision model."""
 
-    DEFAULT_MODEL = "ozlabs/typical"
+    DEFAULT_MODEL = "OzLabs/typical-small"
 
     @staticmethod
     def load_model(model_name=None, device="cpu", marker_token_id=None):
         """Load a Typical checkpoint directory or Hugging Face repo for RLCD fine-tuning.
 
+        Supports both `OzLabs/typical-small` (`best.pt` + backbone in `ckpt["args"]`)
+        and standard Hugging Face / Laya directory layouts.
+
         Args:
             model_name (str, optional): Local directory or repo ID for Typical.
-                Defaults to `"ozlabs/typical"`.
+                Defaults to `"OzLabs/typical-small"`.
             device (str): Target device (`"cpu"` or `"cuda"`). Defaults to `"cpu"`.
             marker_token_id (int, optional): Custom option marker token ID override.
 
@@ -333,32 +336,55 @@ class Typical:
             dict: Standardized dict with keys `("model", "tokenizer", "config", "model_dir", "marker_token_id")`.
         """
         model_name = model_name or Typical.DEFAULT_MODEL
-        model_dir = _download_or_locate(model_name, "typical", required_file="config.json")
+        model_dir = _download_or_locate(model_name, "typical", required_file="MANIFEST.json")
 
-        tok_dir = os.path.join(model_dir, "tokenizer") if os.path.isdir(os.path.join(model_dir, "tokenizer")) else model_dir
-        tokenizer = AutoTokenizer.from_pretrained(tok_dir)
-        config = _load_json_if_exists(os.path.join(model_dir, "rl_agent_config.json"))
-        if not config:
-            config = _load_json_if_exists(os.path.join(model_dir, "config.json"))
-        config.setdefault("model_family", "typical")
-
-        print(f"Building Typical model for '{model_name}'...")
-        if os.path.exists(os.path.join(model_dir, "rl_agent_config.json")) and os.path.isdir(os.path.join(model_dir, "encoder")):
-            model = build_model(config, encoder_dir=os.path.join(model_dir, "encoder"))
-            weights_path = os.path.join(model_dir, "model.safetensors")
-            if os.path.exists(weights_path):
-                model.load_state_dict(load_file(weights_path), strict=True)
-        else:
-            enc_dir = os.path.join(model_dir, "encoder") if os.path.isdir(os.path.join(model_dir, "encoder")) else model_dir
-            encoder = AutoModel.from_pretrained(enc_dir)
-            hidden_size = int(getattr(encoder.config, "hidden_size", config.get("hidden_size", 768)))
+        best_pt_path = os.path.join(model_dir, "best.pt")
+        if os.path.exists(best_pt_path):
+            print(f"Building Typical model from '{best_pt_path}'...")
+            ckpt = torch.load(best_pt_path, map_location="cpu", weights_only=True)
+            args = ckpt.get("args", {})
+            backbone_id = args.get("backbone", "Qwen/Qwen3-1.7B")
+            tokenizer = AutoTokenizer.from_pretrained(backbone_id, padding_side="right")
+            if tokenizer.pad_token_id is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            encoder = AutoModel.from_pretrained(backbone_id)
+            if hasattr(encoder, "language_model") and hasattr(encoder, "visual"):
+                encoder = encoder.language_model
+            tap_layer = int(args.get("tap_layer", 0))
+            if 0 < tap_layer < getattr(encoder.config, "num_hidden_layers", 0) and hasattr(encoder, "layers"):
+                encoder.layers = encoder.layers[:tap_layer]
+                encoder.config.num_hidden_layers = tap_layer
+            hidden_size = int(getattr(encoder.config, "hidden_size", 2048))
             model = MarkerDecisionModelWrapper(encoder=encoder, hidden_size=hidden_size)
+            config = {"model_family": "typical", "backbone": backbone_id, **args}
+        else:
+            tok_dir = os.path.join(model_dir, "tokenizer") if os.path.isdir(os.path.join(model_dir, "tokenizer")) else model_dir
+            tokenizer = AutoTokenizer.from_pretrained(tok_dir)
+            config = _load_json_if_exists(os.path.join(model_dir, "rl_agent_config.json"))
+            if not config:
+                config = _load_json_if_exists(os.path.join(model_dir, "config.json"))
+            config.setdefault("model_family", "typical")
 
+            print(f"Building Typical model for '{model_name}'...")
+            if os.path.exists(os.path.join(model_dir, "rl_agent_config.json")) and os.path.isdir(os.path.join(model_dir, "encoder")):
+                model = build_model(config, encoder_dir=os.path.join(model_dir, "encoder"))
+                weights_path = os.path.join(model_dir, "model.safetensors")
+                if os.path.exists(weights_path):
+                    model.load_state_dict(load_file(weights_path), strict=True)
+            else:
+                enc_dir = os.path.join(model_dir, "encoder") if os.path.isdir(os.path.join(model_dir, "encoder")) else model_dir
+                encoder = AutoModel.from_pretrained(enc_dir)
+                hidden_size = int(getattr(encoder.config, "hidden_size", config.get("hidden_size", 768)))
+                model = MarkerDecisionModelWrapper(encoder=encoder, hidden_size=hidden_size)
+
+        # Fallback marker_token_id if the backbone tokenizer (e.g. Qwen) has no mask_token_id
         resolved_marker_id = (
             marker_token_id
             if marker_token_id is not None
             else config.get("marker_token_id", config.get("option_marker_id"))
         )
+        if resolved_marker_id is None and getattr(tokenizer, "mask_token_id", None) is None:
+            resolved_marker_id = tokenizer.bos_token_id or tokenizer.eos_token_id or 0
 
         model.to(device)
         print(f"Loaded '{model_name}' for fine-tuning (device='{device}').")

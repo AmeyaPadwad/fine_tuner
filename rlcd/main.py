@@ -38,31 +38,43 @@ SPLIT_SEED = 42
 ################################
 
 
-def main(run_sweep: bool = False):
+def main(
+    run_sweep: bool = False,
+    model_name: str | None = None,
+    dataset_name: str | None = None,
+    dataset_subset: int | None = DATASET_SUBSET,
+    column_map: dict | None = COLUMN_MAP,
+    output_dir: str | None = None,
+):
     """
     End-to-end pipeline to fine-tune a decision model on a dataset using RLCD with Brier reward strategy.
     """
+    active_model = model_name or MODEL_NAME_OR_PATH
+    active_dataset = dataset_name or DATASET
+    active_output_dir = output_dir or OUTPUT_DIR
+
     # 1. Authenticate with Hugging Face Hub if credentials exist
     hf_login()
 
     # 2. Load dataset
-    print(f"\n=== Loading '{DATASET}' dataset ===")
-    dataset = load_dataset(DATASET)
+    print(f"\n=== Loading '{active_dataset}' dataset ===")
+    dataset = load_dataset(active_dataset)
+    split_data = dataset["train"] if isinstance(dataset, dict) or hasattr(dataset, "keys") and "train" in dataset else dataset
 
-    if DATASET_SUBSET is not None:
-        raw_data = dataset["train"].select(range(min(DATASET_SUBSET, len(dataset["train"]))))
+    if dataset_subset is not None:
+        raw_data = split_data.select(range(min(dataset_subset, len(split_data))))
     else:
-        raw_data = dataset["train"]
+        raw_data = split_data
 
-    # 3. Preprocess the dataset into the model's format (auto-adapts any schema or uses COLUMN_MAP)
+    # 3. Preprocess the dataset into the model's format (auto-adapts any schema or uses column_map)
     print("\n=== Preprocessing dataset into model format ===")
-    prepared_dataset = auto_prepare_dataset(raw_data, column_map=COLUMN_MAP)
+    prepared_dataset = auto_prepare_dataset(raw_data, column_map=column_map)
 
     # 4. Configure active hyperparameters
     print("\n=== Configuring RL Training Hyperparameters ===")
     config = RLTrainingConfig(
-        model_name_or_path=MODEL_NAME_OR_PATH,
-        output_dir=OUTPUT_DIR,
+        model_name_or_path=active_model,
+        output_dir=active_output_dir,
         epochs=EPOCHS,
         micro_batch_size=MICRO_BATCH_SIZE,
         grad_accum_steps=GRAD_ACCUM_STEPS,
@@ -125,4 +137,24 @@ def main(run_sweep: bool = False):
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(description="RLCD Fine-Tuning Pipeline")
+    parser.add_argument("--model", type=str, default=None, help="Model name or path override")
+    parser.add_argument("--dataset", type=str, default=None, help="Hugging Face dataset ID override")
+    parser.add_argument("--subset", type=int, default=DATASET_SUBSET, help="Dataset subset size (int) or None")
+    parser.add_argument("--column-map", type=str, default=None, help="JSON string for column_map override")
+    parser.add_argument("--output-dir", type=str, default=None, help="Output directory override")
+    parser.add_argument("--sweep", action="store_true", help="Run hyperparameter sweep")
+    cli_args, _ = parser.parse_known_args()
+
+    parsed_col_map = json.loads(cli_args.column_map) if cli_args.column_map else COLUMN_MAP
+    main(
+        run_sweep=cli_args.sweep,
+        model_name=cli_args.model,
+        dataset_name=cli_args.dataset,
+        dataset_subset=cli_args.subset,
+        column_map=parsed_col_map,
+        output_dir=cli_args.output_dir,
+    )

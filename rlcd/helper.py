@@ -45,8 +45,15 @@ def load_dataset(dataset_name=None):
     if dataset_name is None:
         dataset_name = os.getenv("DEFAULT_DATASET_NAME", "Salesforce/xlam-function-calling-60k")
 
+    # Default config names for multi-config Hugging Face datasets
+    default_configs = {
+        "lmsys/toxic-chat": "toxicchat0124",
+        "Nexusflow/NexusRaven_API_evaluation": "standardized_queries",
+    }
+    cfg_name = default_configs.get(dataset_name)
+
     try:
-        dataset = datasets.load_dataset(dataset_name)
+        dataset = datasets.load_dataset(dataset_name, cfg_name) if cfg_name else datasets.load_dataset(dataset_name)
     except Exception as e:
         if dataset_name == "Salesforce/xlam-function-calling-60k":
             print(f"Notice: '{dataset_name}' is gated on HF Hub ({e}).")

@@ -23,10 +23,12 @@ pip install -r rlcd/requirements.txt
 
 _(Note: To train on a GPU, you must install a GPU-enabled version of PyTorch compatible with your CUDA version! Default installations from `requirements.txt` only install the CPU version.)_
 
-The primary entry point to start the training process is `main.py`. You can run it via the command line:
+The primary entry point to start the training process is `main.py`. You can run it via the command line using its default top-of-file variables or pass CLI overrides:
 
 ```bash
 python rlcd/main.py
+# Or override model, dataset, subset, column_map, and output_dir via CLI:
+python rlcd/main.py --model vllm-sr/Decision-1.0-Lex-0.6B --dataset Nexusflow/NexusRaven_API_evaluation --subset 500 --output-dir ./outputs/decision1_nexusraven
 ```
 
 _(Note: For distributed multi-GPU training, use `torchrun --nproc_per_node=<GPUs> rlcd/main.py`)_
@@ -39,11 +41,11 @@ python rlcd/run_ablation_comparison.py
 
 ### Variables in `main.py`
 
-To customize your run, edit the top section of `main.py`:
+To customize your run, edit the top section of `main.py` (or pass `--model`, `--dataset`, `--subset`, `--column-map`, `--output-dir`, `--sweep`):
 
-- `MODEL_NAME_OR_PATH`: The Hugging Face repo ID or local path of the decision model (e.g., `"convaiinnovations/laya"`, `"wfzyx/von"`, `"open-decision-150m"`, `"ozlabs/typical"`, or `"vllm-sr/Decision-1.0-Lex-0.6B"`).
+- `MODEL_NAME_OR_PATH`: The Hugging Face repo ID or local path of the decision model (e.g., `"convaiinnovations/laya"`, `"wfzyx/von"`, `"open-decision-150m"`, `"OzLabs/typical-small"`, or `"vllm-sr/Decision-1.0-Lex-0.6B"`).
 - `OUTPUT_DIR`: The directory where the final fine-tuned model and rolling checkpoints will be saved.
-- `DATASET`: The Hugging Face dataset identifier (e.g., `"Salesforce/xlam-function-calling-60k"`).
+- `DATASET`: The Hugging Face dataset identifier (e.g., `"Salesforce/xlam-function-calling-60k"` or `"Nexusflow/NexusRaven_API_evaluation"`).
 - `DATASET_SUBSET`: An integer to limit the number of training examples (useful for quick tests), or `None` to use the full dataset.
 - `COLUMN_MAP`: An optional dictionary to explicitly map dataset columns or override the decision type (e.g., `{"context": "text", "target": "label_text", "decision_type": "choice"}`), or `None` for automatic schema detection.
 - `DEVICE`: Set to `"cuda"` for GPU acceleration or `"cpu"` for local testing.
@@ -108,6 +110,7 @@ Environment
 - **`helper.py`**: Provides utility functions for Hugging Face Hub authentication, dataset loading, and exporting model checkpoints to disk.
 - **`reward_strategies/brier.py`**: Implements the vectorized Brier Score function used to calculate the reward during the RL step.
 - **`run_ablation_comparison.py`**: Runs a controlled 3-way ablation study comparing the untouched base model, standard SFT (cross-entropy only, no RLCD), and RLCD fine-tuning, saving metrics to `ablation_no_rlcd_results.json`.
+- **`rlcd_kaggle_benchmark.ipynb`**: Ready-to-run Kaggle Notebook (2x T4 GPU) benchmarking `Decision 1.0` and `Typical` across all four target datasets (`Nexusflow/NexusRaven_API_evaluation`, `mteb/tweet_sentiment_extraction`, `Anthropic/hh-rlhf`, and `lmsys/toxic-chat`).
 - **`smoke_tests.py`**: A comprehensive, standalone unit testing suite that verifies the mathematical and structural integrity of every module above without requiring a full training run.
 
 ## 5. Data Preprocessing (Dataset- & Model-Agnostic)

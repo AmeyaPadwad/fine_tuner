@@ -121,11 +121,11 @@ class ModelsSmokeTests:
             return False
 
     def test_typical_load_model(self):
-        print("\n=== Smoke test: Typical.load_model('ozlabs/typical') ===")
+        print("\n=== Smoke test: Typical.load_model('OzLabs/typical-small') ===")
         try:
             from models import Typical
             assert callable(Typical.load_model)
-            assert Typical.DEFAULT_MODEL == "ozlabs/typical"
+            assert Typical.DEFAULT_MODEL == "OzLabs/typical-small"
             print("PASS: Typical.load_model exists and is configured.")
             return True
         except Exception as e:
