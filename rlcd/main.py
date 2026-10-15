@@ -1,6 +1,6 @@
 import os
 from helper import hf_login, load_dataset
-from processing import auto_prepare_dataset_for_laya, prepare_dataset_items, split_dataset_items
+from processing import auto_prepare_dataset, prepare_dataset_items, split_dataset_items
 from training import RLTrainingConfig, RLTrainer
 
 #### Model variables ####
@@ -10,11 +10,12 @@ OUTPUT_DIR = "./laya_finetuned_xlam_rl"
 
 #### Dataset variables ####
 DATASET = "Salesforce/xlam-function-calling-60k"
-DATASET_SUBSET = 10  # Set to an int for fast testing/dev (e.g., 30-60), or None for full dataset
+DATASET_SUBSET = None  # Set to an int for fast testing/dev (e.g., 30-60), or None for full dataset
+COLUMN_MAP = None    # Optional dict to override column roles, e.g. {"context": "text", "target": "label_text", "decision_type": "choice"}
 ###########################
 
 #### Environment variables ####
-DEVICE = "cuda" if __import__("torch").cuda.is_available() else "cpu"  # Change to "cuda" if testing on a GPU
+DEVICE = "cuda"  # Change to "cuda" if testing on a GPU
 ###############################
 
 #### Active Hyperparameters ####
@@ -22,7 +23,7 @@ EPOCHS = 2
 MICRO_BATCH_SIZE = 4
 GRAD_ACCUM_STEPS = 2
 GROUP_SIZE = 4       # Number of GRPO exploration perturbations per sample
-LR_HEAD = 1.0e-4     # Learning rate for the Laya decision head
+LR_HEAD = 1.0e-4     # Learning rate for the decision head
 LR_ENCODER = 2.5e-5  # Learning rate for the ModernBERT encoder
 SIGMA_START = 0.4    # Initial exploration noise
 SIGMA_END = 0.1      # Final exploration noise
@@ -39,7 +40,7 @@ SPLIT_SEED = 42
 
 def main(run_sweep: bool = False):
     """
-    End-to-end pipeline to fine-tune Laya on Salesforce xLAM using RLCD Strategy 1.
+    End-to-end pipeline to fine-tune a decision model on a dataset using RLCD with Brier reward strategy.
     """
     # 1. Authenticate with Hugging Face Hub if credentials exist
     hf_login()
@@ -53,9 +54,9 @@ def main(run_sweep: bool = False):
     else:
         raw_data = dataset["train"]
 
-    # 3. Preprocess the dataset into Laya's format (auto-adapts any schema)
-    print("\n=== Preprocessing dataset into Laya format ===")
-    prepared_dataset = auto_prepare_dataset_for_laya(raw_data)
+    # 3. Preprocess the dataset into the model's format (auto-adapts any schema or uses COLUMN_MAP)
+    print("\n=== Preprocessing dataset into model format ===")
+    prepared_dataset = auto_prepare_dataset(raw_data, column_map=COLUMN_MAP)
 
     # 4. Configure active hyperparameters
     print("\n=== Configuring RL Training Hyperparameters ===")
@@ -86,6 +87,7 @@ def main(run_sweep: bool = False):
         trainer.tokenizer,
         max_len=config.max_len,
         head_max_len=config.head_max_len,
+        marker_token_id=trainer.marker_token_id,
     )
 
     # 6. Partition into Train, Calibration, and Test splits

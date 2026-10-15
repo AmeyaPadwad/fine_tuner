@@ -23,7 +23,7 @@ class Laya:
     """
 
     @staticmethod
-    def load_model(model_name=None, device="cpu"):
+    def load_model(model_name=None, device="cpu", marker_token_id=None):
         """Download and build a Laya checkpoint's trainable pieces, for fine-tuning.
 
         Args:
@@ -32,12 +32,16 @@ class Laya:
                 Falls back to the DEFAULT_LAYA_MODEL environment variable.
             device (str): Device to move the model onto, e.g. "cpu" or
                 "cuda". Defaults to "cpu".
+            marker_token_id (int, optional): Optional custom option marker token ID.
+                If None, checks the checkpoint config (`marker_token_id` / `option_marker_id`)
+                or leaves as None so `processing.py` falls back to `tokenizer.mask_token_id`.
 
         Returns:
             dict: {"model": the built, weight-loaded model (torch.nn.Module),
             "tokenizer": its AutoTokenizer, "config": the parsed
             rl_agent_config.json dict, "model_dir": the local directory
-            the checkpoint was downloaded into}.
+            the checkpoint was downloaded into, "marker_token_id": custom marker
+            token ID or None}.
         """
 
 
@@ -70,6 +74,12 @@ class Laya:
         if os.path.exists(weights_path):
             model.load_state_dict(load_file(weights_path), strict=True)
 
+        resolved_marker_id = (
+            marker_token_id
+            if marker_token_id is not None
+            else config.get("marker_token_id", config.get("option_marker_id"))
+        )
+
         model.to(device)
         print(f"Loaded '{model_name}' for fine-tuning (device='{device}').")
 
@@ -78,4 +88,5 @@ class Laya:
             "tokenizer": tokenizer,
             "config": config,
             "model_dir": model_dir,
+            "marker_token_id": resolved_marker_id,
         }

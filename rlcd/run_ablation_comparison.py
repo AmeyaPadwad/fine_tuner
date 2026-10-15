@@ -5,7 +5,7 @@ import time
 import torch
 from sklearn.metrics import precision_recall_fscore_support
 from helper import load_dataset
-from processing import auto_prepare_dataset_for_laya, prepare_dataset_items, collate_train_batch
+from processing import auto_prepare_dataset, prepare_dataset_items, collate_train_batch
 from models import Laya
 from training import RLTrainingConfig, RLTrainer, compute_rewards
 from main import split_dataset_items
@@ -20,7 +20,7 @@ print("===================================================================")
 # 1. Load exact same 150-example dataset slice
 print("\n1. Loading 150-example dataset slice...")
 raw = load_dataset("lockon/xlam-function-calling-60k")["train"].select(range(150))
-prepared = auto_prepare_dataset_for_laya(raw)
+prepared = auto_prepare_dataset(raw)
 
 # Base model setup
 base = Laya.load_model("convaiinnovations/laya", device="cpu")

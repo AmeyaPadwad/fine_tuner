@@ -237,6 +237,7 @@ class RLTrainer:
             self.tokenizer = tokenizer
             self.agent_config = agent_config or {}
             self.model_dir = None
+            self.marker_token_id = self.agent_config.get("marker_token_id")
         else:
             self._load_checkpoint()
 
@@ -279,6 +280,7 @@ class RLTrainer:
 
         self.model_dir = loaded["model_dir"]
         self.tokenizer = loaded["tokenizer"]
+        self.marker_token_id = loaded.get("marker_token_id")
         cfg = loaded["config"]
         model = loaded["model"]
 
