@@ -79,94 +79,257 @@ class HelperSmokeTests:
         return all(results.values())
 
 
-class LayaSmokeTests:
-    """Smoke tests for models.py"""
+class ModelsSmokeTests:
+    """Smoke tests for models.py (Laya, Von, OpenDecision, Typical, Decision1, DecisionModel)."""
     def __init__(self, model_name=DEFAULT_LAYA_MODEL):
         self.model_name = model_name
 
-    def test_load_model(self):
+    def test_laya_load_model(self):
         print(f"\n=== Smoke test: Laya.load_model('{self.model_name}') ===")
         try:
             from models import Laya
             assert callable(Laya.load_model)
-            print("PASS: Laya.load_model exists.")
+            assert Laya.DEFAULT_MODEL == "convaiinnovations/laya"
+            print("PASS: Laya.load_model exists and is configured.")
             return True
         except Exception as e:
             print(f"FAIL: Laya.load_model raised {type(e).__name__}: {e}")
             return False
 
+    def test_von_load_model(self):
+        print("\n=== Smoke test: Von.load_model('wfzyx/von') ===")
+        try:
+            from models import Von
+            assert callable(Von.load_model)
+            assert Von.DEFAULT_MODEL == "wfzyx/von"
+            print("PASS: Von.load_model exists and is configured.")
+            return True
+        except Exception as e:
+            print(f"FAIL: Von.load_model raised {type(e).__name__}: {e}")
+            return False
+
+    def test_open_decision_load_model(self):
+        print("\n=== Smoke test: OpenDecision.load_model('open-decision-150m') ===")
+        try:
+            from models import OpenDecision
+            assert callable(OpenDecision.load_model)
+            assert OpenDecision.DEFAULT_MODEL == "open-decision-150m"
+            print("PASS: OpenDecision.load_model exists and is configured.")
+            return True
+        except Exception as e:
+            print(f"FAIL: OpenDecision.load_model raised {type(e).__name__}: {e}")
+            return False
+
+    def test_typical_load_model(self):
+        print("\n=== Smoke test: Typical.load_model('ozlabs/typical') ===")
+        try:
+            from models import Typical
+            assert callable(Typical.load_model)
+            assert Typical.DEFAULT_MODEL == "ozlabs/typical"
+            print("PASS: Typical.load_model exists and is configured.")
+            return True
+        except Exception as e:
+            print(f"FAIL: Typical.load_model raised {type(e).__name__}: {e}")
+            return False
+
+    def test_decision1_load_model(self):
+        print("\n=== Smoke test: Decision1.load_model('vllm-sr/Decision-1.0-Lex-0.6B') ===")
+        try:
+            from models import Decision1
+            assert callable(Decision1.load_model)
+            assert Decision1.DEFAULT_MODEL == "vllm-sr/Decision-1.0-Lex-0.6B"
+            print("PASS: Decision1.load_model exists and is configured.")
+            return True
+        except Exception as e:
+            print(f"FAIL: Decision1.load_model raised {type(e).__name__}: {e}")
+            return False
+
+    def test_decision_model_router_and_wrapper(self):
+        print("\n=== Smoke test: DecisionModel router & MarkerDecisionModelWrapper ===")
+        try:
+            from models import DecisionModel, Laya, Von, OpenDecision, Typical, Decision1, MarkerDecisionModelWrapper
+
+            assert DecisionModel.resolve_loader_class("convaiinnovations/laya") is Laya
+            assert DecisionModel.resolve_loader_class("wfzyx/von") is Von
+            assert DecisionModel.resolve_loader_class("open-decision-150m") is OpenDecision
+            assert DecisionModel.resolve_loader_class("ozlabs/typical") is Typical
+            assert DecisionModel.resolve_loader_class("vllm-sr/Decision-1.0-Lex-0.6B") is Decision1
+
+            # Verify MarkerDecisionModelWrapper forward pass
+            class DummyEncoder(nn.Module):
+                def __init__(self, hidden_size=16):
+                    super().__init__()
+                    self.emb = nn.Embedding(100, hidden_size)
+                def forward(self, input_ids, attention_mask=None):
+                    return (self.emb(input_ids),)
+
+            wrapper = MarkerDecisionModelWrapper(DummyEncoder(16), hidden_size=16, option_marker_vec=torch.ones(16))
+            input_ids = torch.randint(0, 100, (2, 6))
+            att = torch.ones((2, 6), dtype=torch.long)
+            mpos = torch.tensor([[1, 3], [2, 4]])
+            mmask = torch.tensor([[True, True], [True, True]])
+            qtype = torch.tensor([0, 2])
+            logits, act = wrapper(input_ids, att, mpos, mmask, qtype)
+            assert logits.shape == (2, 2) and act.shape == (2, 1)
+
+            print("PASS: DecisionModel router and MarkerDecisionModelWrapper forward pass verified.")
+            return True
+        except Exception as e:
+            print(f"FAIL: DecisionModel router/wrapper raised {type(e).__name__}: {e}")
+            return False
+
     def run_all(self):
         """Runs all smoke tests for this class."""
         results = {
-            "load_model": self.test_load_model(),
+            "Laya.load_model": self.test_laya_load_model(),
+            "Von.load_model": self.test_von_load_model(),
+            "OpenDecision.load_model": self.test_open_decision_load_model(),
+            "Typical.load_model": self.test_typical_load_model(),
+            "Decision1.load_model": self.test_decision1_load_model(),
+            "DecisionModel_router_and_wrapper": self.test_decision_model_router_and_wrapper(),
         }
-        print("\n--- Laya Smoke Test Summary ---")
+        print("\n--- Models Smoke Test Summary ---")
         for name, passed in results.items():
             print(f"{name}: {'PASS' if passed else 'FAIL'}")
         return all(results.values())
 
 
+# Backward-compatible alias
+LayaSmokeTests = ModelsSmokeTests
+
+
 class ProcessingSmokeTests:
     """Smoke tests for processing.py"""
-    def test_row_to_laya_input(self):
-        print("\n=== Smoke test: row_to_laya_input ===")
+    def test_auto_prepare_dataset(self):
+        print("\n=== Smoke test: auto_prepare_dataset (all 4 dataset types + column_map) ===")
         try:
-            from processing import row_to_laya_input
-            assert callable(row_to_laya_input)
-            print("PASS: row_to_laya_input exists.")
-            return True
-        except Exception as e:
-            print(f"FAIL: row_to_laya_input raised {type(e).__name__}: {e}")
-            return False
+            from processing import auto_prepare_dataset
 
-    def test_prepare_dataset_for_laya(self):
-        print("\n=== Smoke test: prepare_dataset_for_laya ===")
-        rows = [{"text": "Patient has chest pain.", "label": "urgent"}]
-        try:
-            from processing import prepare_dataset_for_laya
-            prepared = prepare_dataset_for_laya(
-                rows, context_fn=lambda r: r["text"], decision_type="choice",
-                options_fn=lambda _: ["urgent", "not urgent"], target_fn=lambda r: r["label"],
+            # 1. NexusRaven-V2 / Function Calling (choice)
+            nexus_data = [
+                {
+                    "prompt": "Function:\ndef get_weather(city: str):\n    '''Get weather'''\n\nFunction:\ndef book_flight(dest: str):\n    '''Book flight'''\n\nUser Query: Weather in Paris?",
+                    "answer": "Call: get_weather(city='Paris')",
+                },
+                {
+                    "prompt": "Function:\ndef get_weather(city: str):\n    '''Get weather'''\n\nFunction:\ndef book_flight(dest: str):\n    '''Book flight'''\n\nUser Query: Fly to Tokyo",
+                    "answer": "Call: book_flight(dest='Tokyo')",
+                },
+            ]
+            prep_nexus = auto_prepare_dataset(nexus_data)
+            assert prep_nexus[0]["decision_type"] == "choice"
+            assert prep_nexus[0]["options"] == ["get_weather", "book_flight"]
+            assert prep_nexus[0]["target"] == "get_weather"
+
+            # 2. mteb/tweet_sentiment_extraction (choice: auto-detected global labels & explicit column_map)
+            tweet_data = [
+                {"text": "I love this!", "label": 2, "label_text": "positive"},
+                {"text": "It is okay.", "label": 1, "label_text": "neutral"},
+                {"text": "Terrible service.", "label": 0, "label_text": "negative"},
+            ]
+            prep_tweet = auto_prepare_dataset(tweet_data)
+            assert prep_tweet[0]["decision_type"] == "choice"
+            assert sorted(prep_tweet[0]["options"]) == ["negative", "neutral", "positive"]
+            assert prep_tweet[0]["target"] == "positive"
+
+            prep_tweet_custom = auto_prepare_dataset(
+                tweet_data,
+                column_map={
+                    "context": "text",
+                    "target": "label",
+                    "options": ["negative", "neutral", "positive"],
+                    "decision_type": "choice",
+                },
             )
-            assert len(prepared) == 1
-            print("PASS: prepare_dataset_for_laya produced well-formed rows.")
-            return True
-        except Exception as e:
-            print(f"FAIL: prepare_dataset_for_laya raised {type(e).__name__}: {e}")
-            return False
+            assert prep_tweet_custom[0]["target"] == "positive"
+            assert prep_tweet_custom[2]["target"] == "negative"
 
-    def test_prepare_xlam_for_laya(self):
-        print("\n=== Smoke test: prepare_xlam_for_laya ===")
-        try:
-            from processing import prepare_xlam_for_laya
-            assert callable(prepare_xlam_for_laya)
-            print("PASS: prepare_xlam_for_laya exists.")
+            # 3. Anthropic/hh-rlhf (noul: contrastive chosen/rejected pairs)
+            hh_data = [
+                {"chosen": "Human: Hi\nAssistant: Hello!", "rejected": "Human: Hi\nAssistant: Go away."},
+            ]
+            prep_hh = auto_prepare_dataset(hh_data)
+            assert len(prep_hh) == 2
+            assert prep_hh[0]["decision_type"] == "noul" and prep_hh[0]["target"] is True
+            assert prep_hh[1]["decision_type"] == "noul" and prep_hh[1]["target"] is False
+
+            # 4. lmsys/toxic-chat (auto-detected noul on toxicity & explicit column_map score on moderation)
+            toxic_data = [
+                {
+                    "user_input": "Hello friend",
+                    "model_output": "Hi there!",
+                    "toxicity": 0,
+                    "openai_moderation": '[["harassment", 0.01], ["hate", 0.002]]',
+                },
+                {
+                    "user_input": "Say something rude",
+                    "model_output": "You are awful",
+                    "toxicity": 1,
+                    "openai_moderation": '[["harassment", 0.92], ["hate", 0.45]]',
+                },
+            ]
+            prep_toxic_auto = auto_prepare_dataset(toxic_data)
+            assert prep_toxic_auto[0]["decision_type"] == "noul" and prep_toxic_auto[0]["target"] is False
+            assert prep_toxic_auto[1]["decision_type"] == "noul" and prep_toxic_auto[1]["target"] is True
+
+            prep_toxic_score = auto_prepare_dataset(
+                toxic_data,
+                column_map={
+                    "context": ["user_input", "model_output"],
+                    "target": "openai_moderation",
+                    "decision_type": "score",
+                    "scale": (1, 5),
+                },
+            )
+            assert prep_toxic_score[0]["decision_type"] == "score"
+            assert prep_toxic_score[0]["scale"] == [1, 5]
+
+            print("PASS: auto_prepare_dataset works across all 4 dataset types and column_map overrides.")
             return True
         except Exception as e:
-            print(f"FAIL: prepare_xlam_for_laya raised {type(e).__name__}: {e}")
+            print(f"FAIL: auto_prepare_dataset raised {type(e).__name__}: {e}")
             return False
 
     def test_build_training_item(self):
-        print("\n=== Smoke test: build_training_item ===")
+        print("\n=== Smoke test: build_training_item (default & custom marker_token_id) ===")
         try:
-            from processing import build_training_item
-            assert callable(build_training_item)
-            print("PASS: build_training_item exists.")
+            from processing import build_training_item, build_sequence, render_options
+            from models import Laya
+
+            loaded = Laya.load_model(DEFAULT_LAYA_MODEL, device="cpu")
+            tok = loaded["tokenizer"]
+            q = {"type": "choice", "instructions": "Pick one", "criteria": {"opt_a": "first", "opt_b": "second"}}
+            gold = {"probabilities": {"opt_a": 1.0, "opt_b": 0.0}, "label": "opt_a"}
+
+            # 1. Default packing rule (marker_token_id=None -> uses tok.mask_token_id)
+            item_default = build_training_item("sample state", q, gold, tok, marker_token_id=None)
+            assert item_default is not None
+            for m_pos in item_default["markers"]:
+                assert item_default["ids"][m_pos] == tok.mask_token_id
+
+            # 2. Custom marker_token_id override
+            custom_marker_id = 999
+            item_custom = build_training_item("sample state", q, gold, tok, marker_token_id=custom_marker_id)
+            assert item_custom is not None
+            for m_pos in item_custom["markers"]:
+                assert item_custom["ids"][m_pos] == custom_marker_id
+
+            print("PASS: build_training_item works with both default mask_token_id and custom marker_token_id.")
             return True
         except Exception as e:
             print(f"FAIL: build_training_item raised {type(e).__name__}: {e}")
             return False
 
-    def test_build_item_from_laya_row(self):
-        print("\n=== Smoke test: build_item_from_laya_row ===")
+    def test_build_item_from_row(self):
+        print("\n=== Smoke test: build_item_from_row ===")
         try:
-            from processing import build_item_from_laya_row
+            from processing import build_item_from_row
             
-            assert callable(build_item_from_laya_row)
-            print("PASS: build_item_from_laya_row exists.")
+            assert callable(build_item_from_row)
+            print("PASS: build_item_from_row exists.")
             return True
         except Exception as e:
-            print(f"FAIL: build_item_from_laya_row raised {type(e).__name__}: {e}")
+            print(f"FAIL: build_item_from_row raised {type(e).__name__}: {e}")
             return False
 
     def test_prepare_dataset_items(self):
@@ -196,16 +359,31 @@ class ProcessingSmokeTests:
             print(f"FAIL: collate_train_batch raised {type(e).__name__}: {e}")
             return False
 
+    def test_split_dataset_items(self):
+        print("\n=== Smoke test: split_dataset_items ===")
+        try:
+            from processing import split_dataset_items
+
+            dummy_items = [{"ids": [1, 2], "markers": [1], "target": [1.0], "qtype": 0, "label": 0} for _ in range(10)]
+            train_items, calib_items, test_items = split_dataset_items(
+                dummy_items, test_ratio=0.2, calib_ratio=0.1, calib_max=5, seed=42
+            )
+            assert len(train_items) == 7 and len(calib_items) == 1 and len(test_items) == 2
+            print("PASS: split_dataset_items partitions train, calib, and test splits accurately.")
+            return True
+        except Exception as e:
+            print(f"FAIL: split_dataset_items raised {type(e).__name__}: {e}")
+            return False
+
     def run_all(self):
         """Runs all smoke tests for this class."""
         results = {
-            "row_to_laya_input": self.test_row_to_laya_input(),
-            "prepare_dataset_for_laya": self.test_prepare_dataset_for_laya(),
-            "prepare_xlam_for_laya": self.test_prepare_xlam_for_laya(),
+            "auto_prepare_dataset": self.test_auto_prepare_dataset(),
             "build_training_item": self.test_build_training_item(),
-            "build_item_from_laya_row": self.test_build_item_from_laya_row(),
+            "build_item_from_row": self.test_build_item_from_row(),
             "prepare_dataset_items": self.test_prepare_dataset_items(),
-            "collate_train_batch": self.test_collate_train_batch()
+            "collate_train_batch": self.test_collate_train_batch(),
+            "split_dataset_items": self.test_split_dataset_items(),
         }
         print("\n--- Processing Smoke Test Summary ---")
         for name, passed in results.items():
@@ -290,7 +468,7 @@ class TrainingSmokeTests:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run smoke tests for RLCD components.")
     parser.add_argument("--helper", action="store_true", help="Run smoke tests for helper.py")
-    parser.add_argument("--laya", action="store_true", help="Run smoke tests for models.py (Laya)")
+    parser.add_argument("--models", "--laya", dest="models", action="store_true", help="Run smoke tests for models.py")
     parser.add_argument("--processing", action="store_true", help="Run smoke tests for processing.py")
     parser.add_argument("--training", action="store_true", help="Run smoke tests for training.py")
     parser.add_argument("--all", action="store_true", help="Run all smoke tests across all files")
@@ -298,7 +476,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # If no flags are provided, run all by default
-    if not (args.helper or args.laya or args.processing or args.training or args.all):
+    if not (args.helper or args.models or args.processing or args.training or args.all):
         args.all = True
 
     all_success = True
@@ -310,11 +488,11 @@ if __name__ == "__main__":
         all_success = all_success and success
         successes["helper"] = success
 
-    if args.all or args.laya:
-        print("\nRunning LayaSmokeTests...")
-        success = LayaSmokeTests().run_all()
+    if args.all or args.models:
+        print("\nRunning ModelsSmokeTests...")
+        success = ModelsSmokeTests().run_all()
         all_success = all_success and success
-        successes["laya"] = success
+        successes["models"] = success
 
     if args.all or args.processing:
         print("\nRunning ProcessingSmokeTests...")
