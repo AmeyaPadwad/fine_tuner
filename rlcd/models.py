@@ -367,6 +367,8 @@ class Typical:
             if 0 < tap_layer < getattr(encoder.config, "num_hidden_layers", 0) and hasattr(encoder, "layers"):
                 encoder.layers = encoder.layers[:tap_layer]
                 encoder.config.num_hidden_layers = tap_layer
+                if getattr(encoder.config, "layer_types", None) is not None:
+                    encoder.config.layer_types = list(encoder.config.layer_types)[:tap_layer]
             # Freeze lower layers of the 1.7B trunk so 16GB T4 GPUs train fast without OOM
             if hasattr(encoder, "layers") and len(encoder.layers) > 4:
                 for param in encoder.parameters():

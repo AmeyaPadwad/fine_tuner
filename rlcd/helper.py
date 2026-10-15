@@ -95,7 +95,10 @@ def save_rolling_checkpoint(
     save_file(sd, os.path.join(ckpt_dir, "model.safetensors"))
 
     if hasattr(base_model, "encoder") and hasattr(base_model.encoder, "config"):
-        base_model.encoder.config.save_pretrained(os.path.join(ckpt_dir, "encoder"))
+        enc_cfg = base_model.encoder.config
+        if getattr(enc_cfg, "layer_types", None) is not None and getattr(enc_cfg, "num_hidden_layers", None) is not None:
+            enc_cfg.layer_types = list(enc_cfg.layer_types)[: enc_cfg.num_hidden_layers]
+        enc_cfg.save_pretrained(os.path.join(ckpt_dir, "encoder"))
 
     tok.save_pretrained(os.path.join(ckpt_dir, "tokenizer"))
 
@@ -145,7 +148,10 @@ def save_final_model(
 
     # Save encoder config and tokenizer
     if hasattr(base_model, "encoder") and hasattr(base_model.encoder, "config"):
-        base_model.encoder.config.save_pretrained(os.path.join(output_dir, "encoder"))
+        enc_cfg = base_model.encoder.config
+        if getattr(enc_cfg, "layer_types", None) is not None and getattr(enc_cfg, "num_hidden_layers", None) is not None:
+            enc_cfg.layer_types = list(enc_cfg.layer_types)[: enc_cfg.num_hidden_layers]
+        enc_cfg.save_pretrained(os.path.join(output_dir, "encoder"))
     tok.save_pretrained(os.path.join(output_dir, "tokenizer"))
 
     # Update and save agent config
