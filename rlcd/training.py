@@ -562,6 +562,12 @@ class RLTrainer:
             )
             print(f"\nFine-tuned Laya model successfully saved to: {final_path}")
 
+            # Clean up intermediate rolling checkpoint after final export to save disk space
+            rolling_dir = os.path.join(cfg.output_dir, "checkpoint_latest")
+            if os.path.isdir(rolling_dir):
+                import shutil
+                shutil.rmtree(rolling_dir, ignore_errors=True)
+
         if self.is_distributed:
             dist.destroy_process_group()
 
@@ -601,6 +607,8 @@ class RLTrainer:
 
         model = self.model
         model.eval()
+        eval_bs = min(batch_size, max(4, self.config.micro_batch_size * 2))
+        use_amp = self.config.fp16 and (self.device.type == "cuda")
 
         correct = 0
         total = 0
@@ -611,8 +619,8 @@ class RLTrainer:
         all_gold_labels = []
 
         with torch.no_grad():
-            for b_idx in range(0, len(eval_items), batch_size):
-                chunk = eval_items[b_idx : b_idx + batch_size]
+            for b_idx in range(0, len(eval_items), eval_bs):
+                chunk = eval_items[b_idx : b_idx + eval_bs]
                 if not chunk:
                     continue
                 batch = collate_train_batch(chunk, self.tokenizer.pad_token_id)
@@ -623,7 +631,11 @@ class RLTrainer:
                 qtype = batch["qtype"].to(self.device)
                 target = batch["target"].to(self.device)
 
-                logits, _ = model(input_ids, attention_mask, marker_pos, marker_mask, qtype)
+                if use_amp:
+                    with torch.autocast("cuda", dtype=torch.float16):
+                        logits, _ = model(input_ids, attention_mask, marker_pos, marker_mask, qtype)
+                else:
+                    logits, _ = model(input_ids, attention_mask, marker_pos, marker_mask, qtype)
                 logits = logits.float()
                 probs = torch.softmax(logits.masked_fill(~marker_mask, -1e4), -1)
 
