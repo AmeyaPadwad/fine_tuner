@@ -15,7 +15,8 @@ COLUMN_MAP = None    # Optional dict to override column roles, e.g. {"context": 
 ###########################
 
 #### Environment variables ####
-DEVICE = "cuda"  # Change to "cuda" if testing on a GPU
+import torch
+DEVICE = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 ###############################
 
 #### Active Hyperparameters ####
@@ -45,6 +46,7 @@ def main(
     dataset_subset: int | None = DATASET_SUBSET,
     column_map: dict | None = COLUMN_MAP,
     output_dir: str | None = None,
+    device: str | None = None,
 ):
     """
     End-to-end pipeline to fine-tune a decision model on a dataset using RLCD with Brier reward strategy.
@@ -52,6 +54,7 @@ def main(
     active_model = model_name or MODEL_NAME_OR_PATH
     active_dataset = dataset_name or DATASET
     active_output_dir = output_dir or OUTPUT_DIR
+    active_device = device or DEVICE
 
     # 1. Authenticate with Hugging Face Hub if credentials exist
     hf_login()
@@ -71,7 +74,7 @@ def main(
         sigma_end=SIGMA_END,
         ce_weight=CE_WEIGHT,
         reward_strategy=REWARD_STRATEGY,
-        device=DEVICE,
+        device=active_device,
         calib_max=CALIB_MAX,
         seed=SPLIT_SEED,
     )
@@ -155,6 +158,7 @@ if __name__ == "__main__":
     parser.add_argument("--subset", type=int, default=DATASET_SUBSET, help="Dataset subset size (int) or None")
     parser.add_argument("--column-map", type=str, default=None, help="JSON string for column_map override")
     parser.add_argument("--output-dir", type=str, default=None, help="Output directory override")
+    parser.add_argument("--device", type=str, default=DEVICE, help="Device override (cuda/cpu)")
     parser.add_argument("--sweep", action="store_true", help="Run hyperparameter sweep")
     cli_args, _ = parser.parse_known_args()
 
@@ -166,4 +170,5 @@ if __name__ == "__main__":
         dataset_subset=cli_args.subset,
         column_map=parsed_col_map,
         output_dir=cli_args.output_dir,
+        device=cli_args.device,
     )
