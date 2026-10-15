@@ -2,13 +2,13 @@
 
 ## 1. The Big Picture
 
-The `rlcd` module provides a comprehensive Reinforcement Learning (RL) fine-tuning runtime built specifically for the **Laya model family**. Its goal is to take a base decision model and optimize it to produce highly calibrated confidence scores alongside its predictions.
+The `rlcd` module provides a comprehensive Reinforcement Learning (RL) fine-tuning runtime for **open-weight System One decision models** (including **Laya**, **Von**, **OpenDecision**, **Typical**, and **Decision 1.0**). Its goal is to take a base decision model and optimize it to produce highly calibrated confidence scores alongside its predictions.
 
 The pipeline handles the entire end-to-end process autonomously:
 
 1. **Loading Data**: It fetches instruction or conversational datasets from Hugging Face or local storage.
 2. **Preprocessing**: It maps raw text and dictionaries into the mathematically structured format (sequences and `[MASK]` tokens) that the Laya architecture requires, and splits them into train, calibration, and test sets.
-3. **Loading the Model**: It downloads the specified base Laya weights and configuration, dynamically assembling the neural network.
+3. **Loading the Model**: It downloads the specified base model weights and configuration, dynamically assembling the neural network.
 4. **Configuring the Trainer**: It sets up a tailored RL environment with specific hyperparameters for learning rates, exploration noise, and reward strategies.
 5. **Training & Evaluation**: It evaluates pre-training baseline metrics, executes Group Relative Policy Optimization (GRPO) to fine-tune the model, fits post-training temperature calibration, and evaluates post-training performance on the held-out test set.
 6. **Saving**: It compiles the updated weights, the tokenizer, the calibrated configurations, and evaluation metrics into a production-ready Laya Agent package.
@@ -41,10 +41,11 @@ python rlcd/run_ablation_comparison.py
 
 To customize your run, edit the top section of `main.py`:
 
-- `MODEL_NAME_OR_PATH`: The Hugging Face repo ID or local path of the base Laya model (e.g., `"convaiinnovations/laya"`).
+- `MODEL_NAME_OR_PATH`: The Hugging Face repo ID or local path of the decision model (e.g., `"convaiinnovations/laya"`, `"wfzyx/von"`, `"open-decision-150m"`, `"ozlabs/typical"`, or `"vllm-sr/Decision-1.0-Lex-0.6B"`).
 - `OUTPUT_DIR`: The directory where the final fine-tuned model and rolling checkpoints will be saved.
 - `DATASET`: The Hugging Face dataset identifier (e.g., `"Salesforce/xlam-function-calling-60k"`).
 - `DATASET_SUBSET`: An integer to limit the number of training examples (useful for quick tests), or `None` to use the full dataset.
+- `COLUMN_MAP`: An optional dictionary to explicitly map dataset columns or override the decision type (e.g., `{"context": "text", "target": "label_text", "decision_type": "choice"}`), or `None` for automatic schema detection.
 - `DEVICE`: Set to `"cuda"` for GPU acceleration or `"cpu"` for local testing.
 - `TEST_RATIO`, `CALIB_RATIO`, `CALIB_MAX`, `SPLIT_SEED`: Control the train, calibration, and held-out test split proportions.
 
@@ -102,19 +103,21 @@ Environment
 
 - **`main.py`**: The execution script that ties all components together, loads the dataset, configures the trainer, and starts the fine-tuning loop (and optional hyperparameter sweep).
 - **`training.py`**: Contains the core `RLTrainer` class, the `RLTrainingConfig` dataclass, GRPO step and loss calculation, held-out evaluation (`evaluate`), and hyperparameter search (`hyperparameter_sweep`).
-- **`processing.py`**: Handles automatic schema detection (`auto_prepare_dataset_for_laya`), dataset mapping, sequence tokenization, `[MASK]` token alignment, train/calibration/test splitting (`split_dataset_items`), and collation into padded GPU tensors.
-- **`models.py`**: Manages the downloading, caching, instantiation, and parameter-loading of the base Laya neural network architecture.
+- **`processing.py`**: Model- and dataset-agnostic preprocessing module that handles automatic schema and primitive detection (`auto_prepare_dataset`), optional user `column_map` overrides, built-in sequence tokenization and `[MASK]`/marker alignment (`build_sequence`, `render_options`, `prepare_dataset_items`), train/calibration/test splitting (`split_dataset_items`), and collation into padded GPU tensors.
+- **`models.py`**: Provides dedicated loader classes (`Laya`, `Von`, `OpenDecision`, `Typical`, `Decision1`), a unified `DecisionModel` router, and `MarkerDecisionModelWrapper` to download, cache, and adapt any supported decision model into a unified RLCD forward interface.
 - **`helper.py`**: Provides utility functions for Hugging Face Hub authentication, dataset loading, and exporting model checkpoints to disk.
 - **`reward_strategies/brier.py`**: Implements the vectorized Brier Score function used to calculate the reward during the RL step.
 - **`run_ablation_comparison.py`**: Runs a controlled 3-way ablation study comparing the untouched base model, standard SFT (cross-entropy only, no RLCD), and RLCD fine-tuning, saving metrics to `ablation_no_rlcd_results.json`.
 - **`smoke_tests.py`**: A comprehensive, standalone unit testing suite that verifies the mathematical and structural integrity of every module above without requiring a full training run.
 
-## 5. Data Preprocessing
+## 5. Data Preprocessing (Dataset- & Model-Agnostic)
 
-Before training, raw datasets must be transformed into the precise format Laya expects. The preprocessing pipeline operates in four phases:
+Before training, raw datasets are transformed into the standardized `[MASK]`/marker sequence format required by decision models. The preprocessing pipeline in `processing.py` operates in four phases:
 
-1. **Format Mapping**: Functions like `auto_prepare_dataset_for_laya` and `prepare_xlam_for_laya` automatically detect the dataset schema and extract the `context`, the `decision_type` (choice, score, or noul), the available `options`, and the ground-truth `target`.
-2. **Tokenization and Masking (`build_training_item` / `prepare_dataset_items`)**: The text is passed through the tokenizer. The function calculates exactly where the `[MASK]` tokens belong in the sequence to represent the available options and converts the string target into a normalized mathematical probability distribution (e.g., `[0.0, 1.0, 0.0]`).
+1. **Dataset-Agnostic Schema & Primitive Resolution (`auto_prepare_dataset`)**:
+   - **How it works**: `resolve_schema_and_columns` and `infer_decision_primitive` inspect a sample of rows and Hugging Face `features` metadata to classify the dataset into one of four structural modes: `"native_decision"`, `"rollout"`, `"contrastive_pair"` (e.g., `chosen`/`rejected` preference pairs in `Anthropic/hh-rlhf`), or `"standard"` (context $\to$ target datasets). It then automatically infers the decision primitive—**`choice`** (extracting per-row tool/function options or collecting global class labels when no options column exists), **`noul`** (boolean/binary targets), or **`score`** (continuous/ordinal ratings mapped to a `(min, max)` scale).
+   - **Optional User Overrides (`column_map`)**: Users can optionally pass `COLUMN_MAP` to explicitly specify any subset of `context` (single column or list of columns), `target`, `options` (column name or static list), `chosen`/`rejected`, `decision_type`, or `scale`; any omitted fields fall back to automatic detection.
+2. **Model-Agnostic Tokenization and Marker Packing (`build_training_item` / `prepare_dataset_items`)**: Built-in `render_options` and `build_sequence` pack the instructions, candidate options, and context into a single sequence. If the loaded model specifies a custom `marker_token_id` via `models.py`, that token ID is placed before each option; otherwise, it falls back to `tokenizer.mask_token_id` (`[MASK]`).
 3. **Dataset Splitting (`split_dataset_items`)**: The tokenized items are deterministically partitioned into non-overlapping **Train**, **Calibration**, and **Test** splits.
 4. **Collation (`collate_train_batch`)**: Because sentences have different lengths, this function pads the sequences with zeros so they form perfectly rectangular PyTorch tensors, creating boolean masks so the RL loop knows to ignore the padded areas during matrix multiplication.
 

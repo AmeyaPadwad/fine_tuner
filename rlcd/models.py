@@ -1,26 +1,144 @@
-"""Laya model loading and adaptation module.
+"""Decision model loading and adaptation module for the RLCD pipeline.
 
-Handles downloading, caching, and building the `convaiinnovations/laya`
-model architecture. Translates raw dataset configurations into format-agnostic
-Laya inputs.
+Provides dedicated loader classes for the open-weight decision models listed in
+`docs/test_models_datasets.md`:
+    1. `Laya` (`convaiinnovations/laya`)
+    2. `Von` (`wfzyx/von`)
+    3. `OpenDecision` (`open-decision-ai` / `open-decision-150m`)
+    4. `Typical` (`Typical` by Oz Labs)
+    5. `Decision1` (`vllm-sr/Decision-1.0-Lex-0.6B`)
+    6. `DecisionModel`: Unified router that automatically dispatches to the
+       appropriate model class based on `model_name`.
+
+Every model class exposes a `load_model(model_name, device="cpu", marker_token_id=None)`
+method returning a standardized dictionary:
+    `{"model": nn.Module, "tokenizer": AutoTokenizer, "config": dict, "model_dir": str, "marker_token_id": Optional[int]}`
+where `model(input_ids, attention_mask, marker_pos, marker_mask, qtype)` returns
+`(logits, act_logits)` compatible with `RLTrainer`.
 """
 
 import json
 import os
+from typing import Any, Dict, Optional
+
+import torch
+import torch.nn as nn
 from huggingface_hub import snapshot_download
 from laya.agent import _fix_tokenizer_config
 from laya.common import build_model
 from safetensors.torch import load_file
-from transformers import AutoTokenizer
-
+from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 VALID_DECISION_TYPES = ("choice", "score", "noul")
-DEFAULT_CACHE_DIR = os.getenv("DEFAULT_CACHE_DIR", "./.cache") 
+DEFAULT_CACHE_DIR = os.getenv("DEFAULT_CACHE_DIR", "./.cache")
 
+
+# ===========================================================================
+# Unified Marker-Readout Decision Wrapper for Encoder Backbones
+# ===========================================================================
+
+class MarkerDecisionModelWrapper(nn.Module):
+    """Wraps a Hugging Face encoder (or custom backbone) with RLCD marker-readout heads.
+
+    Ensures any encoder-based decision model (Von, OpenDecision, Typical, Decision 1.0,
+    or a generic ModernBERT/BERT encoder) conforms to the forward signature expected
+    by `training.py`:
+        `forward(input_ids, attention_mask, marker_pos, marker_mask, qtype) -> (logits, act_logits)`
+    """
+
+    def __init__(
+        self,
+        encoder: nn.Module,
+        hidden_size: int,
+        option_marker_vec: Optional[torch.Tensor] = None,
+    ):
+        super().__init__()
+        self.encoder = encoder
+        self.hidden_size = hidden_size
+        self.type_emb = nn.Embedding(3, hidden_size)
+        self.scorer = nn.Linear(hidden_size, 1)
+        self.act_head = nn.Sequential(
+            nn.Linear(hidden_size + 4, hidden_size // 4),
+            nn.GELU(),
+            nn.Linear(hidden_size // 4, 1),
+        )
+        self.head_checkpointing = False
+        if option_marker_vec is not None:
+            self.register_buffer("option_marker_vec", option_marker_vec.float())
+        else:
+            self.option_marker_vec = None
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        marker_pos: torch.Tensor,
+        marker_mask: torch.Tensor,
+        qtype: torch.Tensor,
+    ):
+        out = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        h = out.last_hidden_state if hasattr(out, "last_hidden_state") else out[0]
+        h = h + self.type_emb(qtype.clamp(0, 2))[:, None, :]
+
+        idx = marker_pos.clamp(min=0)[:, :, None].expand(-1, -1, h.size(-1))
+        m = torch.gather(h, 1, idx)
+        if self.option_marker_vec is not None and m.size(-1) == self.option_marker_vec.numel():
+            m = m + self.option_marker_vec.to(m.device, dtype=m.dtype)
+
+        logits = self.scorer(m).squeeze(-1).float()
+        logits = logits.masked_fill(~marker_mask, -1e4)
+
+        p = torch.softmax(logits.detach(), -1)
+        k = marker_mask.sum(-1).clamp(min=2).float()
+        ent = -(p * torch.log(p.clamp_min(1e-9))).sum(-1) / torch.log(k)
+        if p.size(-1) >= 2:
+            top2 = p.topk(2, -1).values
+        else:
+            top1 = p.topk(1, -1).values
+            top2 = torch.cat([top1, torch.zeros_like(top1)], dim=-1)
+        feats = torch.stack([top2[:, 0], top2[:, 0] - top2[:, 1], ent, k / 255.0], -1)
+        pooled = h[:, 0].float()
+        act_input = torch.cat([pooled, feats], -1).to(self.act_head[0].weight.dtype)
+        act_logits = self.act_head(act_input)
+        return logits, act_logits
+
+
+def _download_or_locate(model_name: str, family_subdir: str, required_file: str = "config.json") -> str:
+    """Resolve a local path or download/cache a Hugging Face repo snapshot."""
+    if os.path.isdir(model_name):
+        return model_name
+
+    cache_root = os.getenv("DEFAULT_CACHE_DIR", DEFAULT_CACHE_DIR)
+    cache_dir = f"{cache_root}/{family_subdir}/{model_name}/"
+    already_cached = os.path.isdir(cache_dir) and (
+        os.path.exists(os.path.join(cache_dir, required_file))
+        or os.path.exists(os.path.join(cache_dir, "rl_agent_config.json"))
+    )
+
+    if already_cached:
+        print(f"Found '{model_name}' already cached at {cache_dir}, skipping download.")
+        return cache_dir
+
+    print(f"Downloading checkpoint '{model_name}'...")
+    return snapshot_download(model_name, local_dir=cache_dir)
+
+
+def _load_json_if_exists(path: str) -> Dict[str, Any]:
+    """Load a JSON file if it exists, otherwise return an empty dict."""
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+# ===========================================================================
+# 1. Laya Decision Model (`convaiinnovations/laya`)
+# ===========================================================================
 
 class Laya:
-    """Namespace for loading Laya and converting raw dataset rows into Laya's input shape.
-    """
+    """Loader for the `convaiinnovations/laya` decision model family."""
+
+    DEFAULT_MODEL = "convaiinnovations/laya"
 
     @staticmethod
     def load_model(model_name=None, device="cpu", marker_token_id=None):
@@ -43,29 +161,14 @@ class Laya:
             the checkpoint was downloaded into, "marker_token_id": custom marker
             token ID or None}.
         """
-
-
         if model_name is None:
-            model_name = os.getenv("DEFAULT_LAYA_MODEL")
+            model_name = os.getenv("DEFAULT_LAYA_MODEL", Laya.DEFAULT_MODEL)
 
-        DEFAULT_LAYA_CACHE_DIR = DEFAULT_CACHE_DIR+f"/laya/{model_name}/"
-
-        already_cached = os.path.isdir(DEFAULT_LAYA_CACHE_DIR) and os.path.exists(
-            os.path.join(DEFAULT_LAYA_CACHE_DIR, "rl_agent_config.json")
-        )
-
-        if already_cached:
-            print(f"Found '{model_name}' already cached at {DEFAULT_LAYA_CACHE_DIR}, skipping download.")
-            model_dir = DEFAULT_LAYA_CACHE_DIR
-        else:
-            print(f"Downloading Laya checkpoint '{model_name}'...")
-            model_dir = snapshot_download(model_name, local_dir=DEFAULT_LAYA_CACHE_DIR)
-
+        model_dir = _download_or_locate(model_name, "laya", required_file="rl_agent_config.json")
         _fix_tokenizer_config(model_dir)
 
         tokenizer = AutoTokenizer.from_pretrained(os.path.join(model_dir, "tokenizer"))
-        with open(os.path.join(model_dir, "rl_agent_config.json")) as f:
-            config = json.load(f)
+        config = _load_json_if_exists(os.path.join(model_dir, "rl_agent_config.json"))
 
         print(f"Building model for '{model_name}'...")
         model = build_model(config, encoder_dir=os.path.join(model_dir, "encoder"))
@@ -90,3 +193,293 @@ class Laya:
             "model_dir": model_dir,
             "marker_token_id": resolved_marker_id,
         }
+
+
+# ===========================================================================
+# 2. Von Decision Model (`wfzyx/von`)
+# ===========================================================================
+
+class Von:
+    """Loader for the `wfzyx/von` open-source System One decision model."""
+
+    DEFAULT_MODEL = "wfzyx/von"
+
+    @staticmethod
+    def load_model(model_name=None, device="cpu", marker_token_id=None):
+        """Download and build a Von checkpoint wrapped for RLCD fine-tuning.
+
+        Args:
+            model_name (str, optional): Hugging Face repo ID or local path.
+                Defaults to `"wfzyx/von"`.
+            device (str): Target device (`"cpu"` or `"cuda"`). Defaults to `"cpu"`.
+            marker_token_id (int, optional): Custom option marker token ID override.
+
+        Returns:
+            dict: Standardized dict with keys `("model", "tokenizer", "config", "model_dir", "marker_token_id")`.
+        """
+        model_name = model_name or Von.DEFAULT_MODEL
+        model_dir = _download_or_locate(model_name, "von", required_file="config.json")
+
+        tok_dir = os.path.join(model_dir, "tokenizer") if os.path.isdir(os.path.join(model_dir, "tokenizer")) else model_dir
+        tokenizer = AutoTokenizer.from_pretrained(tok_dir)
+        config = _load_json_if_exists(os.path.join(model_dir, "config.json"))
+        calib = _load_json_if_exists(os.path.join(model_dir, "marker_calibration.json"))
+        config.update({"calibration": calib, "model_family": "von"})
+
+        print(f"Building Von model for '{model_name}'...")
+        encoder = AutoModel.from_pretrained(model_dir)
+        hidden_size = int(getattr(encoder.config, "hidden_size", config.get("hidden_size", 1024)))
+
+        marker_pt_path = os.path.join(model_dir, "option_marker.pt")
+        marker_vec = torch.load(marker_pt_path, map_location="cpu", weights_only=True) if os.path.exists(marker_pt_path) else None
+        if isinstance(marker_vec, dict):
+            marker_vec = next((v for v in marker_vec.values() if isinstance(v, torch.Tensor)), None)
+
+        model = MarkerDecisionModelWrapper(encoder=encoder, hidden_size=hidden_size, option_marker_vec=marker_vec)
+        resolved_marker_id = (
+            marker_token_id
+            if marker_token_id is not None
+            else config.get("marker_token_id", config.get("option_marker_id"))
+        )
+
+        model.to(device)
+        print(f"Loaded '{model_name}' for fine-tuning (device='{device}').")
+
+        return {
+            "model": model,
+            "tokenizer": tokenizer,
+            "config": config,
+            "model_dir": model_dir,
+            "marker_token_id": resolved_marker_id,
+        }
+
+
+# ===========================================================================
+# 3. OpenDecision AI (`open-decision-ai` / `open-decision-150m`)
+# ===========================================================================
+
+class OpenDecision:
+    """Loader for the `open-decision-ai` (`open-decision-150m`) decision model."""
+
+    DEFAULT_MODEL = "open-decision-150m"
+
+    @staticmethod
+    def load_model(model_name=None, device="cpu", marker_token_id=None):
+        """Load an OpenDecision checkpoint directory or Hugging Face repo for RLCD fine-tuning.
+
+        Args:
+            model_name (str, optional): Local directory or repo ID for OpenDecision.
+                Defaults to `"open-decision-150m"`.
+            device (str): Target device (`"cpu"` or `"cuda"`). Defaults to `"cpu"`.
+            marker_token_id (int, optional): Custom option marker token ID override.
+
+        Returns:
+            dict: Standardized dict with keys `("model", "tokenizer", "config", "model_dir", "marker_token_id")`.
+        """
+        model_name = model_name or OpenDecision.DEFAULT_MODEL
+        model_dir = _download_or_locate(model_name, "open_decision", required_file="config.json")
+
+        tok_dir = os.path.join(model_dir, "tokenizer") if os.path.isdir(os.path.join(model_dir, "tokenizer")) else model_dir
+        tokenizer = AutoTokenizer.from_pretrained(tok_dir)
+        config = _load_json_if_exists(os.path.join(model_dir, "open_decision.json"))
+        if not config:
+            config = _load_json_if_exists(os.path.join(model_dir, "config.json"))
+        config.setdefault("model_family", "open_decision")
+
+        print(f"Building OpenDecision model for '{model_name}'...")
+        enc_dir = os.path.join(model_dir, "encoder") if os.path.isdir(os.path.join(model_dir, "encoder")) else model_dir
+        encoder = AutoModel.from_pretrained(enc_dir)
+        hidden_size = int(getattr(encoder.config, "hidden_size", config.get("hidden_size", 768)))
+
+        model = MarkerDecisionModelWrapper(encoder=encoder, hidden_size=hidden_size)
+        resolved_marker_id = (
+            marker_token_id
+            if marker_token_id is not None
+            else config.get("marker_token_id", config.get("option_marker_id"))
+        )
+
+        model.to(device)
+        print(f"Loaded '{model_name}' for fine-tuning (device='{device}').")
+
+        return {
+            "model": model,
+            "tokenizer": tokenizer,
+            "config": config,
+            "model_dir": model_dir,
+            "marker_token_id": resolved_marker_id,
+        }
+
+
+# ===========================================================================
+# 4. Typical Decision Model (`Typical` by Oz Labs)
+# ===========================================================================
+
+class Typical:
+    """Loader for the `Typical` (Oz Labs) open decision model."""
+
+    DEFAULT_MODEL = "ozlabs/typical"
+
+    @staticmethod
+    def load_model(model_name=None, device="cpu", marker_token_id=None):
+        """Load a Typical checkpoint directory or Hugging Face repo for RLCD fine-tuning.
+
+        Args:
+            model_name (str, optional): Local directory or repo ID for Typical.
+                Defaults to `"ozlabs/typical"`.
+            device (str): Target device (`"cpu"` or `"cuda"`). Defaults to `"cpu"`.
+            marker_token_id (int, optional): Custom option marker token ID override.
+
+        Returns:
+            dict: Standardized dict with keys `("model", "tokenizer", "config", "model_dir", "marker_token_id")`.
+        """
+        model_name = model_name or Typical.DEFAULT_MODEL
+        model_dir = _download_or_locate(model_name, "typical", required_file="config.json")
+
+        tok_dir = os.path.join(model_dir, "tokenizer") if os.path.isdir(os.path.join(model_dir, "tokenizer")) else model_dir
+        tokenizer = AutoTokenizer.from_pretrained(tok_dir)
+        config = _load_json_if_exists(os.path.join(model_dir, "rl_agent_config.json"))
+        if not config:
+            config = _load_json_if_exists(os.path.join(model_dir, "config.json"))
+        config.setdefault("model_family", "typical")
+
+        print(f"Building Typical model for '{model_name}'...")
+        if os.path.exists(os.path.join(model_dir, "rl_agent_config.json")) and os.path.isdir(os.path.join(model_dir, "encoder")):
+            model = build_model(config, encoder_dir=os.path.join(model_dir, "encoder"))
+            weights_path = os.path.join(model_dir, "model.safetensors")
+            if os.path.exists(weights_path):
+                model.load_state_dict(load_file(weights_path), strict=True)
+        else:
+            enc_dir = os.path.join(model_dir, "encoder") if os.path.isdir(os.path.join(model_dir, "encoder")) else model_dir
+            encoder = AutoModel.from_pretrained(enc_dir)
+            hidden_size = int(getattr(encoder.config, "hidden_size", config.get("hidden_size", 768)))
+            model = MarkerDecisionModelWrapper(encoder=encoder, hidden_size=hidden_size)
+
+        resolved_marker_id = (
+            marker_token_id
+            if marker_token_id is not None
+            else config.get("marker_token_id", config.get("option_marker_id"))
+        )
+
+        model.to(device)
+        print(f"Loaded '{model_name}' for fine-tuning (device='{device}').")
+
+        return {
+            "model": model,
+            "tokenizer": tokenizer,
+            "config": config,
+            "model_dir": model_dir,
+            "marker_token_id": resolved_marker_id,
+        }
+
+
+# ===========================================================================
+# 5. Decision 1.0 (`vllm-sr/Decision-1.0-Lex-0.6B`)
+# ===========================================================================
+
+class Decision1:
+    """Loader for the `vllm-sr/Decision-1.0-Lex-0.6B` (and Kai) decision model family."""
+
+    DEFAULT_MODEL = "vllm-sr/Decision-1.0-Lex-0.6B"
+
+    @staticmethod
+    def load_model(model_name=None, device="cpu", marker_token_id=None):
+        """Download and build a Decision 1.0 checkpoint for RLCD fine-tuning.
+
+        Supports both native Decision 1.0 directory layout (`native/encoder`,
+        `native/tokenizer`, `native/decision_config.json`) and standard Hugging Face
+        `AutoModel` loading.
+
+        Args:
+            model_name (str, optional): Repo ID or local path.
+                Defaults to `"vllm-sr/Decision-1.0-Lex-0.6B"`.
+            device (str): Target device (`"cpu"` or `"cuda"`). Defaults to `"cpu"`.
+            marker_token_id (int, optional): Custom option marker token ID override.
+
+        Returns:
+            dict: Standardized dict with keys `("model", "tokenizer", "config", "model_dir", "marker_token_id")`.
+        """
+        model_name = model_name or Decision1.DEFAULT_MODEL
+        model_dir = _download_or_locate(model_name, "decision1", required_file="config.json")
+
+        native_tok_dir = os.path.join(model_dir, "native", "tokenizer")
+        std_tok_dir = os.path.join(model_dir, "tokenizer")
+        if os.path.isdir(native_tok_dir):
+            tok_dir = native_tok_dir
+        elif os.path.isdir(std_tok_dir):
+            tok_dir = std_tok_dir
+        else:
+            tok_dir = model_dir
+
+        tokenizer = AutoTokenizer.from_pretrained(tok_dir)
+
+        decision_cfg_path = os.path.join(model_dir, "native", "decision_config.json")
+        config = _load_json_if_exists(decision_cfg_path) or _load_json_if_exists(os.path.join(model_dir, "config.json"))
+        config.setdefault("model_family", "decision1")
+
+        print(f"Building Decision 1.0 model for '{model_name}'...")
+        native_enc_dir = os.path.join(model_dir, "native", "encoder")
+        enc_dir = native_enc_dir if os.path.isdir(native_enc_dir) else model_dir
+        encoder = AutoModel.from_pretrained(enc_dir, trust_remote_code=True)
+        hidden_size = int(getattr(encoder.config, "hidden_size", config.get("hidden_size", 1024)))
+
+        model = MarkerDecisionModelWrapper(encoder=encoder, hidden_size=hidden_size)
+        resolved_marker_id = (
+            marker_token_id
+            if marker_token_id is not None
+            else config.get("marker_token_id", config.get("option_marker_id"))
+        )
+
+        model.to(device)
+        print(f"Loaded '{model_name}' for fine-tuning (device='{device}').")
+
+        return {
+            "model": model,
+            "tokenizer": tokenizer,
+            "config": config,
+            "model_dir": model_dir,
+            "marker_token_id": resolved_marker_id,
+        }
+
+
+# ===========================================================================
+# 6. Unified DecisionModel Router
+# ===========================================================================
+
+class DecisionModel:
+    """Unified factory that routes `load_model` to Laya, Von, OpenDecision, Typical, or Decision1."""
+
+    REGISTRY = {
+        "laya": Laya,
+        "von": Von,
+        "open-decision": OpenDecision,
+        "opendecision": OpenDecision,
+        "typical": Typical,
+        "decision-1.0": Decision1,
+        "decision1": Decision1,
+    }
+
+    @staticmethod
+    def resolve_loader_class(model_name: Optional[str]):
+        """Select the model loader class matching `model_name`."""
+        if not model_name:
+            return Laya
+        low = model_name.lower()
+        if "von" in low:
+            return Von
+        if "open-decision" in low or "opendecision" in low:
+            return OpenDecision
+        if "typical" in low:
+            return Typical
+        if "decision-1.0" in low or "decision1" in low:
+            return Decision1
+        return Laya
+
+    @staticmethod
+    def load_model(model_name=None, device="cpu", marker_token_id=None):
+        """Dispatch `load_model` to the appropriate decision model class."""
+        loader_cls = DecisionModel.resolve_loader_class(model_name)
+        return loader_cls.load_model(
+            model_name=model_name,
+            device=device,
+            marker_token_id=marker_token_id,
+        )

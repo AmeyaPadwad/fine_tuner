@@ -79,31 +79,123 @@ class HelperSmokeTests:
         return all(results.values())
 
 
-class LayaSmokeTests:
-    """Smoke tests for models.py"""
+class ModelsSmokeTests:
+    """Smoke tests for models.py (Laya, Von, OpenDecision, Typical, Decision1, DecisionModel)."""
     def __init__(self, model_name=DEFAULT_LAYA_MODEL):
         self.model_name = model_name
 
-    def test_load_model(self):
+    def test_laya_load_model(self):
         print(f"\n=== Smoke test: Laya.load_model('{self.model_name}') ===")
         try:
             from models import Laya
             assert callable(Laya.load_model)
-            print("PASS: Laya.load_model exists.")
+            assert Laya.DEFAULT_MODEL == "convaiinnovations/laya"
+            print("PASS: Laya.load_model exists and is configured.")
             return True
         except Exception as e:
             print(f"FAIL: Laya.load_model raised {type(e).__name__}: {e}")
             return False
 
+    def test_von_load_model(self):
+        print("\n=== Smoke test: Von.load_model('wfzyx/von') ===")
+        try:
+            from models import Von
+            assert callable(Von.load_model)
+            assert Von.DEFAULT_MODEL == "wfzyx/von"
+            print("PASS: Von.load_model exists and is configured.")
+            return True
+        except Exception as e:
+            print(f"FAIL: Von.load_model raised {type(e).__name__}: {e}")
+            return False
+
+    def test_open_decision_load_model(self):
+        print("\n=== Smoke test: OpenDecision.load_model('open-decision-150m') ===")
+        try:
+            from models import OpenDecision
+            assert callable(OpenDecision.load_model)
+            assert OpenDecision.DEFAULT_MODEL == "open-decision-150m"
+            print("PASS: OpenDecision.load_model exists and is configured.")
+            return True
+        except Exception as e:
+            print(f"FAIL: OpenDecision.load_model raised {type(e).__name__}: {e}")
+            return False
+
+    def test_typical_load_model(self):
+        print("\n=== Smoke test: Typical.load_model('ozlabs/typical') ===")
+        try:
+            from models import Typical
+            assert callable(Typical.load_model)
+            assert Typical.DEFAULT_MODEL == "ozlabs/typical"
+            print("PASS: Typical.load_model exists and is configured.")
+            return True
+        except Exception as e:
+            print(f"FAIL: Typical.load_model raised {type(e).__name__}: {e}")
+            return False
+
+    def test_decision1_load_model(self):
+        print("\n=== Smoke test: Decision1.load_model('vllm-sr/Decision-1.0-Lex-0.6B') ===")
+        try:
+            from models import Decision1
+            assert callable(Decision1.load_model)
+            assert Decision1.DEFAULT_MODEL == "vllm-sr/Decision-1.0-Lex-0.6B"
+            print("PASS: Decision1.load_model exists and is configured.")
+            return True
+        except Exception as e:
+            print(f"FAIL: Decision1.load_model raised {type(e).__name__}: {e}")
+            return False
+
+    def test_decision_model_router_and_wrapper(self):
+        print("\n=== Smoke test: DecisionModel router & MarkerDecisionModelWrapper ===")
+        try:
+            from models import DecisionModel, Laya, Von, OpenDecision, Typical, Decision1, MarkerDecisionModelWrapper
+
+            assert DecisionModel.resolve_loader_class("convaiinnovations/laya") is Laya
+            assert DecisionModel.resolve_loader_class("wfzyx/von") is Von
+            assert DecisionModel.resolve_loader_class("open-decision-150m") is OpenDecision
+            assert DecisionModel.resolve_loader_class("ozlabs/typical") is Typical
+            assert DecisionModel.resolve_loader_class("vllm-sr/Decision-1.0-Lex-0.6B") is Decision1
+
+            # Verify MarkerDecisionModelWrapper forward pass
+            class DummyEncoder(nn.Module):
+                def __init__(self, hidden_size=16):
+                    super().__init__()
+                    self.emb = nn.Embedding(100, hidden_size)
+                def forward(self, input_ids, attention_mask=None):
+                    return (self.emb(input_ids),)
+
+            wrapper = MarkerDecisionModelWrapper(DummyEncoder(16), hidden_size=16, option_marker_vec=torch.ones(16))
+            input_ids = torch.randint(0, 100, (2, 6))
+            att = torch.ones((2, 6), dtype=torch.long)
+            mpos = torch.tensor([[1, 3], [2, 4]])
+            mmask = torch.tensor([[True, True], [True, True]])
+            qtype = torch.tensor([0, 2])
+            logits, act = wrapper(input_ids, att, mpos, mmask, qtype)
+            assert logits.shape == (2, 2) and act.shape == (2, 1)
+
+            print("PASS: DecisionModel router and MarkerDecisionModelWrapper forward pass verified.")
+            return True
+        except Exception as e:
+            print(f"FAIL: DecisionModel router/wrapper raised {type(e).__name__}: {e}")
+            return False
+
     def run_all(self):
         """Runs all smoke tests for this class."""
         results = {
-            "load_model": self.test_load_model(),
+            "Laya.load_model": self.test_laya_load_model(),
+            "Von.load_model": self.test_von_load_model(),
+            "OpenDecision.load_model": self.test_open_decision_load_model(),
+            "Typical.load_model": self.test_typical_load_model(),
+            "Decision1.load_model": self.test_decision1_load_model(),
+            "DecisionModel_router_and_wrapper": self.test_decision_model_router_and_wrapper(),
         }
-        print("\n--- Laya Smoke Test Summary ---")
+        print("\n--- Models Smoke Test Summary ---")
         for name, passed in results.items():
             print(f"{name}: {'PASS' if passed else 'FAIL'}")
         return all(results.values())
+
+
+# Backward-compatible alias
+LayaSmokeTests = ModelsSmokeTests
 
 
 class ProcessingSmokeTests:
@@ -376,7 +468,7 @@ class TrainingSmokeTests:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run smoke tests for RLCD components.")
     parser.add_argument("--helper", action="store_true", help="Run smoke tests for helper.py")
-    parser.add_argument("--laya", action="store_true", help="Run smoke tests for models.py (Laya)")
+    parser.add_argument("--models", "--laya", dest="models", action="store_true", help="Run smoke tests for models.py")
     parser.add_argument("--processing", action="store_true", help="Run smoke tests for processing.py")
     parser.add_argument("--training", action="store_true", help="Run smoke tests for training.py")
     parser.add_argument("--all", action="store_true", help="Run all smoke tests across all files")
@@ -384,7 +476,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # If no flags are provided, run all by default
-    if not (args.helper or args.laya or args.processing or args.training or args.all):
+    if not (args.helper or args.models or args.processing or args.training or args.all):
         args.all = True
 
     all_success = True
@@ -396,11 +488,11 @@ if __name__ == "__main__":
         all_success = all_success and success
         successes["helper"] = success
 
-    if args.all or args.laya:
-        print("\nRunning LayaSmokeTests...")
-        success = LayaSmokeTests().run_all()
+    if args.all or args.models:
+        print("\nRunning ModelsSmokeTests...")
+        success = ModelsSmokeTests().run_all()
         all_success = all_success and success
-        successes["laya"] = success
+        successes["models"] = success
 
     if args.all or args.processing:
         print("\nRunning ProcessingSmokeTests...")

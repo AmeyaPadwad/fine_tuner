@@ -31,7 +31,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import AutoTokenizer
 
 # Relative functions
-from models import Laya
+from models import DecisionModel
 from reward_strategies.brier import Brier
 from helper import save_rolling_checkpoint
 from processing import collate_train_batch
@@ -276,7 +276,7 @@ class RLTrainer:
         if self.config.cache_dir:
             os.environ["DEFAULT_CACHE_DIR"] = self.config.cache_dir
 
-        loaded = Laya.load_model(self.config.model_name_or_path, device=self.device)
+        loaded = DecisionModel.load_model(self.config.model_name_or_path, device=self.device)
 
         self.model_dir = loaded["model_dir"]
         self.tokenizer = loaded["tokenizer"]
