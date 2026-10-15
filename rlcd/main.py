@@ -56,21 +56,7 @@ def main(
     # 1. Authenticate with Hugging Face Hub if credentials exist
     hf_login()
 
-    # 2. Load dataset
-    print(f"\n=== Loading '{active_dataset}' dataset ===")
-    dataset = load_dataset(active_dataset)
-    split_data = dataset["train"] if isinstance(dataset, dict) or hasattr(dataset, "keys") and "train" in dataset else dataset
-
-    if dataset_subset is not None:
-        raw_data = split_data.select(range(min(dataset_subset, len(split_data))))
-    else:
-        raw_data = split_data
-
-    # 3. Preprocess the dataset into the model's format (auto-adapts any schema or uses column_map)
-    print("\n=== Preprocessing dataset into model format ===")
-    prepared_dataset = auto_prepare_dataset(raw_data, column_map=column_map)
-
-    # 4. Configure active hyperparameters
+    # 4. Configure active hyperparameters (initializes distributed process group if running under torchrun)
     print("\n=== Configuring RL Training Hyperparameters ===")
     config = RLTrainingConfig(
         model_name_or_path=active_model,
@@ -90,8 +76,31 @@ def main(
         seed=SPLIT_SEED,
     )
 
-    # 5. Initialize trainer and tokenize sequences
+    # 5. Initialize trainer first so DDP process group & rank are active before dataset download
     trainer = RLTrainer(config=config)
+
+    # 2. Load dataset safely across DDP ranks
+    print(f"\n=== Loading '{active_dataset}' dataset ===")
+    if trainer.is_distributed:
+        import torch.distributed as dist
+        if trainer.rank == 0:
+            dataset = load_dataset(active_dataset)
+        dist.barrier()
+        if trainer.rank != 0:
+            dataset = load_dataset(active_dataset)
+    else:
+        dataset = load_dataset(active_dataset)
+
+    split_data = dataset["train"] if isinstance(dataset, dict) or (hasattr(dataset, "keys") and "train" in dataset) else dataset
+
+    if dataset_subset is not None:
+        raw_data = split_data.select(range(min(dataset_subset, len(split_data))))
+    else:
+        raw_data = split_data
+
+    # 3. Preprocess the dataset into the model's format (auto-adapts any schema or uses column_map)
+    print("\n=== Preprocessing dataset into model format ===")
+    prepared_dataset = auto_prepare_dataset(raw_data, column_map=column_map)
 
     print("\n=== Tokenizing sequences and creating [MASK] alignments ===")
     all_items = prepare_dataset_items(

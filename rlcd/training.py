@@ -268,15 +268,18 @@ class RLTrainer:
                 self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def _load_checkpoint(self):
-        """Download or load Laya checkpoint, tokenizer, and config."""
-        if self.rank != 0:
-            # Let rank 0 handle the download first if needed
-            time.sleep(2)
-
+        """Download or load model checkpoint, tokenizer, and config safely across DDP ranks."""
         if self.config.cache_dir:
             os.environ["DEFAULT_CACHE_DIR"] = self.config.cache_dir
 
-        loaded = DecisionModel.load_model(self.config.model_name_or_path, device=self.device)
+        if self.is_distributed:
+            if self.rank == 0:
+                loaded = DecisionModel.load_model(self.config.model_name_or_path, device=self.device)
+            dist.barrier()
+            if self.rank != 0:
+                loaded = DecisionModel.load_model(self.config.model_name_or_path, device=self.device)
+        else:
+            loaded = DecisionModel.load_model(self.config.model_name_or_path, device=self.device)
 
         self.model_dir = loaded["model_dir"]
         self.tokenizer = loaded["tokenizer"]
