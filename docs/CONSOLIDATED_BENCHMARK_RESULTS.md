@@ -98,3 +98,21 @@ Our controlled ablation study (tested on identical held-out test splits) demonst
   [https://github.com/adlakhapriya95/humanitarians-ai-volunteer](https://github.com/adlakhapriya95/humanitarians-ai-volunteer)
 - **Fellows Tracking Submission (PR #232 for Professor Bear):**  
   [https://github.com/nikbearbrown/humanitarians-youtube/pull/232](https://github.com/nikbearbrown/humanitarians-youtube/pull/232)
+
+
+---
+
+## 8. Key Architectural Limitations & Research Learnings (The Model-Agnostic Challenge)
+
+### The Core Finding:
+While RLCD Strategy 1 reliably achieved its primary mathematical objective across all tested backbones—**dramatically slashing Expected Calibration Error (ECE) down to 0.5% - 5%**—empirical cross-model benchmarking revealed a fundamental architectural limitation in the current pipeline:
+
+1. **The Representation Mismatch on Causal Backbones:**
+   - **`Laya` (ModernBERT 421M):** Naturally pre-trained as a bidirectional masked language model, natively optimized for `[MASK]` marker token readouts. It excelled across tool calling and clinical triage (reaching $99.10\%$ accuracy and $0.83\%$ ECE).
+   - **`Typical` (OzLabs/typical-small):** Built on a Qwen-family causal/autoregressive backbone. Attaching a synthetic bidirectional marker-readout head (`MarkerDecisionModelWrapper`) forces an unnatural attention representation.
+2. **Failure on Complex Natural Language:**
+   - On **`mteb/tweet_sentiment_extraction`**, `Typical-small` plateaued at $39.54\%$ accuracy (barely above the 33.3% random baseline).
+   - While RLCD successfully calibrated its uncertainty (driving ECE to an extraordinary $0.50\%$), the model lacked the representational capacity to disentangle subtle sentiment nuances through fixed marker positions.
+3. **Future Research Direction for True Model-Agnosticism:**
+   - To achieve genuine model-agnosticism across both bidirectional encoders (BERT/ModernBERT) and causal/autoregressive LLMs (Qwen, Llama, Mistral), the pipeline cannot rely on a single, uniform marker-readout wrapper.
+   - Future work must implement **architecture-aware decision heads** (e.g. sequence-last-token pooling with classification heads for causal models, versus bidirectional token gathering for masked encoders).
