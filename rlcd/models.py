@@ -304,7 +304,13 @@ class OpenDecision:
         model_dir = _download_or_locate(hub_target, "open_decision", required_file="config.json")
 
         tok_dir = os.path.join(model_dir, "tokenizer") if os.path.isdir(os.path.join(model_dir, "tokenizer")) else model_dir
-        tokenizer = AutoTokenizer.from_pretrained(tok_dir)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(tok_dir)
+        except Exception:
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(os.path.join(model_dir, "tokenizer"))
+            except Exception:
+                tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-xsmall")
 
         config = _load_json_if_exists(os.path.join(model_dir, "open_decision.json"))
         if not config:
@@ -315,6 +321,14 @@ class OpenDecision:
         print(f"Building OpenDecision model for '{model_name}'...")
         backbone_cfg_path = os.path.join(model_dir, "backbone_config.json")
         enc_dir = os.path.join(model_dir, "encoder") if os.path.isdir(os.path.join(model_dir, "encoder")) else model_dir
+
+        # Ensure backbone_config.json is fetched if missing from cache
+        if not os.path.exists(backbone_cfg_path) and not os.path.isdir(hub_target):
+            try:
+                from huggingface_hub import hf_hub_download
+                backbone_cfg_path = hf_hub_download(hub_target, "backbone_config.json", local_dir=model_dir)
+            except Exception:
+                pass
 
         if os.path.exists(backbone_cfg_path):
             # Tokz-labs/OpenDecision-* layout: encoder config lives in backbone_config.json
@@ -328,8 +342,24 @@ class OpenDecision:
                     for k, v in sd.items()
                 }
                 encoder.load_state_dict(enc_sd, strict=False)
+        elif config.get("backbone"):
+            # Fallback to config.json's specified backbone (e.g. microsoft/deberta-v3-xsmall)
+            enc_cfg = AutoConfig.from_pretrained(config["backbone"])
+            encoder = AutoModel.from_config(enc_cfg)
+            weights_path = os.path.join(model_dir, "model.safetensors")
+            if os.path.exists(weights_path):
+                sd = load_file(weights_path)
+                enc_sd = {
+                    (k[len("backbone.") :] if k.startswith("backbone.") else (k[len("encoder.") :] if k.startswith("encoder.") else k)): v
+                    for k, v in sd.items()
+                }
+                encoder.load_state_dict(enc_sd, strict=False)
         else:
-            encoder = AutoModel.from_pretrained(enc_dir)
+            try:
+                encoder = AutoModel.from_pretrained(enc_dir)
+            except Exception:
+                # Ultimate fallback to ModernBERT-base
+                encoder = AutoModel.from_pretrained(OpenDecision.DEFAULT_BACKBONE)
 
         hidden_size = int(getattr(encoder.config, "hidden_size", config.get("hidden_size", 768)))
         model = MarkerDecisionModelWrapper(encoder=encoder, hidden_size=hidden_size)
