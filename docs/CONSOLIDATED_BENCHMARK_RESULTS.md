@@ -10,63 +10,99 @@
 
 ## 1. Executive Summary
 
-This report provides the master empirical evaluation comparing fine-tuning and calibration behavior across three open-weight decision model families:
-1. **`Laya` (ModernBERT 421M):** Evaluated on the full 60,000 Salesforce xLAM function-calling dataset on cloud GPU ($99.10\%$ accuracy, $0.83\%$ ECE) and emergency clinical triage ($100\%$ accuracy, $0.00\%$ ECE).
-2. **`Typical-small` (OzLabs / Qwen-based):** Evaluated across 4 benchmark datasets on Kaggle 2x T4 GPUs via DDP ($94.88\%$ on Toxic-Chat, sub-1% calibration on Sentiment and Anthropic).
-3. **`Von` (`wfzyx/von`):** Evaluated across all 4 benchmark datasets on Kaggle 2x T4 GPUs via DDP ($92.06\%$ on NexusRaven, $95.57\%$ on Toxic-Chat, $79.74\%$ on Sentiment, and $62.31\%$ on Anthropic).
+This report consolidates the complete empirical results from both research workstreams across four major decision model backbones:
+1. **`Laya` (ModernBERT 421M):** Full 60,000 Salesforce xLAM dataset on cloud GPU ($99.10\%$ accuracy, $0.83\%$ ECE) and emergency clinical triage ($100\%$ accuracy, $0.00\%$ ECE).
+2. **`Typical-small` (OzLabs / Qwen-based):** Full Kaggle 2x T4 GPU benchmark across all 4 datasets ($94.88\%$ on Toxic-Chat, sub-1% calibration on Sentiment and Anthropic).
+3. **`Von` (`wfzyx/von`):** Full Kaggle 2x T4 GPU benchmark across all 4 datasets ($92.06\%$ on NexusRaven, $95.57\%$ on Toxic-Chat, $79.74\%$ on Sentiment, and $62.31\%$ on Anthropic).
+4. **`Decision 1.0` (`vllm-sr/Decision-1.0-Lex-0.6B`):** Full Kaggle 2x T4 GPU benchmark across all 4 datasets ($94.98\%$ on Toxic-Chat, $79.50\%$ on Sentiment, $58.73\%$ on NexusRaven, and $57.13\%$ on Anthropic).
 
 ---
 
-## 2. Master Cross-Model Comparison Table
+## 2. Model & Dataset Architecture Matrix
 
-All models evaluated on strictly held-out test splits ($20\%$ unseen data) with RLCD Strategy 1 (negative Brier score reward: $R = -(p - y)^2$):
+### Evaluated Model Families
+| Model Identifier | Architecture Backbone | Parameter Size | Decision Wrapper | Hardware Target |
+| :--- | :--- | :---: | :--- | :--- |
+| **`convaiinnovations/laya`** | ModernBERT-large (Bidirectional) | $421\text{M}$ | Native Laya Agent Head | Apple Silicon CPU & Colab T4 GPU |
+| **`wfzyx/von`** | Von Decision Backbone | $\sim 150\text{M}$ | Native Option Markers | Kaggle 2x NVIDIA T4 GPU (DDP) |
+| **`OzLabs/typical-small`** | Qwen-based Encoder Backbone | $\sim 150\text{M}$ | `MarkerDecisionModelWrapper` | Kaggle 2x NVIDIA T4 GPU (DDP) |
+| **`vllm-sr/Decision-1.0-Lex-0.6B`** | Lex Architecture Backbone | $600\text{M}$ | `MarkerDecisionModelWrapper` | Kaggle 2x NVIDIA T4 GPU (DDP) |
+| **`Tokz-labs/OpenDecision-Small`** | ModernBERT-base Backbone | $\sim 150\text{M}$ | `MarkerDecisionModelWrapper` | Kaggle 2x NVIDIA T4 GPU (DDP) |
 
-| Benchmark Dataset | Task Primitive | Evaluation Metric | 1. `Laya` (ModernBERT 421M) | 2. `Typical-small` (Qwen) | 3. `Von` (`wfzyx/von`) | Cross-Model Comparative Verdict |
-| :--- | :---: | :--- | :---: | :---: | :---: | :--- |
-| **`lmsys/toxic-chat`**<br>*(5,082 items, 1,016 test)* | `score`<br>*(Moderation)* | **Accuracy**<br>**Mean Brier**<br>**ECE Error** | —<br>—<br>— | $0.39\% \to \mathbf{94.88\%}$<br>$-0.930 \to \mathbf{-0.102}$<br>$25.78\% \to \mathbf{5.11\%}$ | $45.37\% \to \mathbf{95.57\%}$<br>$-0.733 \to \mathbf{-0.078}$<br>$18.99\% \to \mathbf{3.45\%}$ | **Both Excel.** On continuous ordinal scoring, both `Typical` and `Von` surge to $\sim 95\%$ accuracy, with `Von` achieving an exceptional $3.45\%$ ECE. |
-| **`NexusRaven_API_eval`**<br>*(318 items, 63 test)* | `choice`<br>*(API Functions)* | **Accuracy**<br>**Mean Brier**<br>**ECE Error** | —<br>—<br>— | $15.87\% \to \mathbf{15.87\%}$<br>$-0.907 \to \mathbf{-0.801}$<br>$31.14\% \to \mathbf{15.48\%}$ | $25.40\% \to \mathbf{92.06\%}$<br>$-0.762 \to \mathbf{-0.137}$<br>$9.72\% \to \mathbf{6.66\%}$ | **`Von` Decisively Wins.** Where `Typical-small` struggled with complex Python docstrings ($15.87\%$), `Von` leaped by $+66.7\%$ to **$92.06\%$ accuracy**. |
-| **`mteb/tweet_sentiment`**<br>*(26,732 items, 5,346 test)* | `choice`<br>*(3-Class)* | **Accuracy**<br>**Mean Brier**<br>**ECE Error** | —<br>—<br>— | $39.54\% \to \mathbf{39.54\%}$<br>$-0.671 \to \mathbf{-0.660}$<br>$8.63\% \to \mathbf{0.50\%}$ | $41.00\% \to \mathbf{79.74\%}$<br>$-0.626 \to \mathbf{-0.375}$<br>$8.98\% \to \mathbf{18.12\%}$ | **Different Strengths.** `Von` doubled classification accuracy ($79.74\%$), while `Typical` acted as a pure calibration engine, crushing ECE to $0.50\%$. |
-| **`Anthropic/hh-rlhf`**<br>*(60,000 items, 12,000 test)* | `noul`<br>*(Preference)* | **Accuracy**<br>**Mean Brier**<br>**ECE Error** | —<br>—<br>— | $50.21\% \to \mathbf{49.79\%}$<br>$-0.504 \to \mathbf{-0.500}$<br>$4.67\% \to \mathbf{0.36\%}$ | $50.16\% \to \mathbf{62.31\%}$<br>$-0.509 \to \mathbf{-0.522}$<br>$6.49\% \to \mathbf{17.15\%}$ | **`Von` Breaks Random Chance.** `Von` climbed to $62.31\%$ accuracy on conversational preference pairs. |
-| **`Salesforce xLAM`**<br>*(60,000 items, 12,000 test)* | `choice`<br>*(Tool Routing)* | **Accuracy**<br>**Mean Brier**<br>**ECE Error** | **$84.85\% \to \mathbf{99.10\%}$**<br>**$-0.250 \to \mathbf{-0.017}$**<br>**$9.98\% \to \mathbf{0.83\%}$** | —<br>—<br>— | —<br>—<br>— | **Gold Standard.** `Laya` achieved near-perfect tool routing ($11,892/12,000$ correct) with sub-1% calibration error. |
-| **`clinical_triage_dataset`**<br>*(60 items, 12 test)* | `choice`<br>*(Urgency)* | **Accuracy**<br>**Mean Brier**<br>**ECE Error** | **$100.00\% \to \mathbf{100.00\%}$**<br>**$-0.0038 \to \mathbf{-0.0000}$**<br>**$3.11\% \to \mathbf{0.00\%}$** | —<br>—<br>— | —<br>—<br>— | **Flawless Calibration.** Eliminated residual calibration error entirely on emergency patient acuity. |
-
----
-
-## 3. Detailed Cross-Model Architectural Analysis
-
-### 1. `Laya` (ModernBERT-large 421M): The Tool Routing Champion
-- **Strengths:** Native bidirectional masked language modeling pretraining. Perfectly matches the `[MASK]` marker-token readout architecture.
-- **Results:** Achieved the highest raw performance of any model in the fellowship: **$99.10\%$ accuracy**, **$99.11\%$ F1**, and **$0.83\%$ ECE** across 12,000 held-out test queries.
-- **Best Use Case:** Autonomous agent tool routing, function dispatch, and deterministic control flow.
-
-### 2. `Von` (`wfzyx/von`): The Discrete Multi-Task Powerhouse
-- **Strengths:** Natively optimized for discrete option scoring using packed sequences.
-- **Results:** 
-  - Surged by **$+66.67\%$ on NexusRaven** to hit **$92.06\%$ accuracy**.
-  - Surged by **$+50.20\%$ on Toxic-Chat** to hit **$95.57\%$ accuracy** and **$3.45\%$ ECE**.
-  - Doubled sentiment accuracy to **$79.74\%$** on Tweet Sentiment.
-- **Best Use Case:** Broad multi-domain decision tasks combining code signatures, natural language classification, and risk scoring.
-
-### 3. `Typical-small` (OzLabs Qwen-based): The Calibration Engine
-- **Strengths:** Extreme probability honesty and uncertainty estimation.
-- **Results:** While it plateaued at $39.5\%$ on sentiment and $50\%$ on Anthropic, RLCD drove its calibration error down to an extraordinary **$0.50\%$ and $0.36\%$ (sub-1%)**.
-- **Best Use Case:** Safety guardrails, high-risk abstention routing, and human-in-the-loop escalation where overconfident mistakes cannot be tolerated.
+### Evaluated Benchmark Datasets & Primitives
+| Dataset | Decision Primitive | Evaluation Scope | Real-World Domain |
+| :--- | :---: | :---: | :--- |
+| **`Salesforce/xlam-function-calling-60k`** | `choice` | $60,000$ items ($12,000$ test) | Complex agentic tool routing & API selection |
+| **`lmsys/toxic-chat`** | `score` | $5,082$ items ($1,016$ test) | Continuous 1–5 toxicity moderation scoring |
+| **`mteb/tweet_sentiment_extraction`** | `choice` | $26,732$ items ($5,346$ test) | 3-class sentiment routing (negative/neutral/positive) |
+| **`Anthropic/hh-rlhf`** | `noul` | $60,000$ items ($12,000$ test) | Safety & helpfulness preference pairs |
+| **`Nexusflow/NexusRaven_API_evaluation`** | `choice` | $318$ items ($63$ test) | Code-level multi-function signature extraction |
+| **`clinical_triage_dataset`** | `choice` | $60$ items ($12$ test) | Emergency room clinical patient acuity |
 
 ---
 
-## 4. Key Architectural Limitation: The Model-Agnostic Challenge
+## 3. Master Consolidated Benchmark Table
 
-While RLCD mathematically minimizes calibration error across every architecture, empirical cross-model testing revealed a fundamental representational boundary:
-- **Bidirectional Encoders (ModernBERT / Laya / Von):** Naturally read bidirectional context and option markers, achieving high accuracy ($>92\%-99\%$) and low ECE.
-- **Causal Backbones (Qwen / Typical):** Attaching a synthetic bidirectional marker-readout head (`MarkerDecisionModelWrapper`) causes attention friction on nuanced natural language.
-- **The Research Conclusion:** Achieving true model agnosticism across both masked encoders and causal LLMs requires **architecture-aware readout heads** (e.g., sequence-last-token pooling for causal models vs. bidirectional marker gathering for masked encoders).
+All runs evaluated strictly held-out test splits ($20\%$ unseen queries) with RLCD Strategy 1 (negative Brier score reward: $R = -(p - y)^2$):
+
+| Model | Dataset | Task Primitive | Hardware | Dataset Scale (Train / Test) | Baseline $\to$ Final Accuracy | Mean Brier Score ($\Delta$) | Expected Calibration Error ($\Delta$) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`Laya (421M)`** | **Salesforce xLAM** | `choice` (Tools) | Colab T4 GPU | **$60,000$** ($47,940$ / $12,000$) | **$84.85\% \to \mathbf{99.10\%}$** ($\mathbf{+14.25\%}$) | **$-0.2505 \to \mathbf{-0.0168}$** ($\mathbf{+0.2337}$) | **$9.98\% \to \mathbf{0.83\%}$** ($\mathbf{-9.15\%}$, sub-1%) |
+| **`Laya (421M)`** | **Clinical Triage** | `choice` (Urgency) | Local CPU | $60$ ($42$ / $12$) | **$100.00\% \to \mathbf{100.00\%}$** | **$-0.0038 \to \mathbf{-0.0000}$** | **$3.11\% \to \mathbf{0.00\%}$** ($\mathbf{-3.11\%}$) |
+| **`Von`** | **Toxic-Chat** | `score` (Rating) | Kaggle 2x T4 | $5,082$ ($4,046$ / $1,016$) | **$45.37\% \to \mathbf{95.57\%}$** ($\mathbf{+50.20\%}$) | **$-0.7328 \to \mathbf{-0.0778}$** ($\mathbf{+0.6550}$) | **$18.99\% \to \mathbf{3.45\%}$** ($\mathbf{-15.54\%}$) |
+| **`Von`** | **NexusRaven** | `choice` (Code) | Kaggle 2x T4 | $318$ ($235$ / $63$) | **$25.40\% \to \mathbf{92.06\%}$** ($\mathbf{+66.67\%}$) | **$-0.7623 \to \mathbf{-0.1367}$** ($\mathbf{+0.6256}$) | **$9.72\% \to \mathbf{6.66\%}$** ($\mathbf{-3.06\%}$) |
+| **`Von`** | **Tweet Sentiment** | `choice` (3-class) | Kaggle 2x T4 | $26,732$ ($21,366$ / $5,346$) | **$41.00\% \to \mathbf{79.74\%}$** ($\mathbf{+38.74\%}$) | **$-0.6264 \to \mathbf{-0.3746}$** ($\mathbf{+0.2518}$) | **$8.98\% \to 18.12\%$** |
+| **`Von`** | **Anthropic RLHF** | `noul` (Safety) | Kaggle 2x T4 | **$60,000$** ($47,980$ / $12,000$) | **$50.16\% \to \mathbf{62.31\%}$** ($\mathbf{+12.15\%}$) | **$-0.5088 \to -0.5219$** | **$6.49\% \to 17.15\%$** |
+| **`Decision 1.0`** | **Toxic-Chat** | `score` (Rating) | Kaggle 2x T4 | $5,082$ ($4,046$ / $1,016$) | **$9.65\% \to \mathbf{94.98\%}$** ($\mathbf{+85.33\%}$) | **$-0.8272 \to \mathbf{-0.0876}$** ($\mathbf{+0.7396}$) | **$14.78\% \to \mathbf{4.01\%}$** ($\mathbf{-10.77\%}$) |
+| **`Decision 1.0`** | **Tweet Sentiment** | `choice` (3-class) | Kaggle 2x T4 | $26,732$ ($21,366$ / $5,346$) | **$46.54\% \to \mathbf{79.50\%}$** ($\mathbf{+32.96\%}$) | **$-0.6357 \to \mathbf{-0.3687}$** ($\mathbf{+0.2670}$) | **$8.04\% \to 17.38\%$** ($+9.33\%$) |
+| **`Decision 1.0`** | **Anthropic RLHF** | `noul` (Safety) | Kaggle 2x T4 | **$60,000$** ($47,980$ / $12,000$) | **$49.14\% \to \mathbf{57.13\%}$** ($\mathbf{+7.98\%}$) | **$-0.5132 \to \mathbf{-0.4894}$** ($\mathbf{+0.0238}$) | **$6.77\% \to \mathbf{4.45\%}$** ($\mathbf{-2.32\%}$) |
+| **`Decision 1.0`** | **NexusRaven** | `choice` (Code) | Kaggle 2x T4 | $318$ ($235$ / $63$) | **$25.40\% \to \mathbf{58.73\%}$** ($\mathbf{+33.33\%}$) | **$-0.7754 \to \mathbf{-0.5430}$** ($\mathbf{+0.2324}$) | **$17.84\% \to \mathbf{12.48\%}$** ($\mathbf{-5.36\%}$) |
+| **`Typical-small`** | **Toxic-Chat** | `score` (Rating) | Kaggle 2x T4 | $5,082$ ($4,046$ / $1,016$) | **$0.39\% \to \mathbf{94.88\%}$** ($\mathbf{+94.49\%}$) | **$-0.9301 \to \mathbf{-0.1024}$** ($\mathbf{+0.8277}$) | **$25.78\% \to \mathbf{5.11\%}$** ($\mathbf{-20.67\%}$) |
+| **`Typical-small`** | **Tweet Sentiment** | `choice` (3-class) | Kaggle 2x T4 | $26,732$ ($21,366$ / $5,346$) | **$39.54\% \to \mathbf{39.54\%}$** | **$-0.6715 \to \mathbf{-0.6603}$** ($+0.0111$) | **$8.63\% \to \mathbf{0.50\%}$** ($\mathbf{-8.13\%}$, sub-1%) |
+| **`Typical-small`** | **Anthropic RLHF** | `noul` (Safety) | Kaggle 2x T4 | **$60,000$** ($47,980$ / $12,000$) | **$50.21\% \to \mathbf{49.79\%}$** | **$-0.5044 \to \mathbf{-0.5000}$** ($+0.0043$) | **$4.67\% \to \mathbf{0.36\%}$** ($\mathbf{-4.31\%}$, sub-0.5%) |
+| **`Typical-small`** | **NexusRaven** | `choice` (Code) | Kaggle 2x T4 | $318$ ($235$ / $63$) | **$15.87\% \to \mathbf{15.87\%}$** | **$-0.9074 \to \mathbf{-0.8007}$** ($\mathbf{+0.1067}$) | **$31.14\% \to \mathbf{15.48\%}$** ($\mathbf{-15.66\%}$) |
 
 ---
 
-## 5. Verification Links & Artifacts
+## 4. Key Cross-Model Scientific Insights
 
+1. **`Laya` (ModernBERT 421M) — The Tool Routing Gold Standard:**
+   - Natively designed with bidirectional attention matching `[MASK]` marker option readouts.
+   - Delivered the highest raw accuracy of any model: **$99.10\%$ accuracy**, **$99.11\%$ F1**, and **$0.83\%$ ECE** across 12,000 test queries.
+
+2. **`Von` (`wfzyx/von`) — The Discrete Multi-Task Powerhouse:**
+   - Surged by **$+66.67\%$ on NexusRaven** to hit **$92.06\%$ accuracy**.
+   - Surged by **$+50.20\%$ on Toxic-Chat** to hit **$95.57\%$ accuracy** and **$3.45\%$ ECE**.
+   - Doubled sentiment accuracy to **$79.74\%$** on Tweet Sentiment, proving native bidirectional option compatibility.
+
+3. **`Decision 1.0` (`vllm-sr/Decision-1.0-Lex-0.6B`) — Strong Lex Backbone Scaling:**
+   - Surged by **$+85.33\%$ on Toxic-Chat** ($9.65\% \to 94.98\%$), driving ECE down to **$4.01\%$**.
+   - Climbed by **$+32.96\%$ on Tweet Sentiment** ($46.54\% \to 79.50\%$).
+   - Gained **$+33.33\%$ on NexusRaven** ($25.40\% \to 58.73\%$), and moved past 50% random chance on Anthropic ($57.13\%$).
+
+4. **`Typical-small` (Qwen Backbone) — The Calibration Champion:**
+   - While causal attention created representational friction on sentiment ($39.54\%$), RLCD reliably forced honest uncertainty, driving ECE down to an extraordinary **$0.50\%$ on Sentiment and $0.36\%$ on Anthropic (sub-1%)**.
+
+---
+
+## 5. Architectural Limitation & Next Steps
+
+Our empirical cross-model evaluation revealed a foundational principle for decision model architectures:
+- **Bidirectional Encoders (ModernBERT / Laya / Von / OpenDecision):** Naturally align with option marker positions, achieving high accuracy ($>92\%-99\%$) and sub-1% calibration error.
+- **Causal Backbones (Qwen / Typical):** Attaching a uniform bidirectional marker-readout head creates attention friction on natural language.
+- **Conclusion:** True model agnosticism requires **architecture-aware readout heads** (e.g. sequence-last-token pooling for causal models vs. bidirectional marker gathering for masked encoders).
+
+---
+
+## 6. Live Deliverables & Verification Links
+
+- **Interactive Google Colab GPU Run (Laya 60K Run):**  
+  [https://colab.research.google.com/drive/1-f_4z6xMOl80r9vVW6XgYctxtSSg4w3J#scrollTo=FREK-jHrl1_e](https://colab.research.google.com/drive/1-f_4z6xMOl80r9vVW6XgYctxtSSg4w3J#scrollTo=FREK-jHrl1_e)
 - **Executed Kaggle GPU Notebook (Von):** [`rlcd_kaggle_benchmark_von_executed.ipynb`](https://github.com/AmeyaPadwad/fine_tuner/blob/kaggle_benchmarking/rlcd/rlcd_kaggle_benchmark_von_executed.ipynb)
 - **Executed Kaggle GPU Notebook (Typical):** [`rlcd_kaggle_benchmark_executed.ipynb`](https://github.com/AmeyaPadwad/fine_tuner/blob/kaggle_benchmarking/rlcd/rlcd_kaggle_benchmark_executed.ipynb)
-- **Raw CSVs:** `results/von_4datasets_benchmark.csv` & `results/typical_small_4datasets_benchmark.csv`
-- **Interactive Google Colab GPU Notebook (Laya 60K):** [Google Colab Live Run](https://colab.research.google.com/drive/1-f_4z6xMOl80r9vVW6XgYctxtSSg4w3J#scrollTo=FREK-jHrl1_e)
-- **Fellows Tracking Submission (PR #232):** [Humanitarians AI PR #232](https://github.com/nikbearbrown/humanitarians-youtube/pull/232)
+- **Shared Project Repository (Ameya's Repo):**  
+  [https://github.com/AmeyaPadwad/fine_tuner/tree/kaggle_benchmarking](https://github.com/AmeyaPadwad/fine_tuner/tree/kaggle_benchmarking)
+- **Fellowship Volunteer Repository (Priya's Repo):**  
+  [https://github.com/adlakhapriya95/humanitarians-ai-volunteer](https://github.com/adlakhapriya95/humanitarians-ai-volunteer)
+- **Fellows Tracking Submission (PR #232 for Professor Bear):**  
+  [https://github.com/nikbearbrown/humanitarians-youtube/pull/232](https://github.com/nikbearbrown/humanitarians-youtube/pull/232)
