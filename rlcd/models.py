@@ -265,16 +265,25 @@ class Von:
 # ===========================================================================
 
 class OpenDecision:
-    """Loader for the `open-decision-ai` (`open-decision-150m`) decision model."""
+    """Loader for the `open-decision-ai` (`open-decision-150m` / `Tokz-labs/OpenDecision-*`) decision model."""
 
     DEFAULT_MODEL = "open-decision-150m"
+    DEFAULT_BACKBONE = "answerdotai/ModernBERT-base"
 
     @staticmethod
     def load_model(model_name=None, device="cpu", marker_token_id=None):
-        """Load an OpenDecision checkpoint directory or Hugging Face repo for RLCD fine-tuning.
+        """Load an OpenDecision checkpoint directory, HF repo, or `open-decision-150m` (ModernBERT-base).
+
+        Supports:
+            1. `"open-decision-150m"` / `"open-decision-ai"`: Builds the 150M ModernBERT-base
+               decision architecture specified by the `open-decision-ai` package when no local
+               archive directory is present.
+            2. `"Tokz-labs/OpenDecision-Small"` / `"Tokz-labs/OpenDecision-Large"`: Loads the
+               Hugging Face OpenDecision checkpoint (`backbone_config.json` + `model.safetensors`).
+            3. Local directory containing `open_decision.json` + `config.json` + `model.safetensors`.
 
         Args:
-            model_name (str, optional): Local directory or repo ID for OpenDecision.
+            model_name (str, optional): Model identifier or local directory.
                 Defaults to `"open-decision-150m"`.
             device (str): Target device (`"cpu"` or `"cuda"`). Defaults to `"cpu"`.
             marker_token_id (int, optional): Custom option marker token ID override.
@@ -283,26 +292,55 @@ class OpenDecision:
             dict: Standardized dict with keys `("model", "tokenizer", "config", "model_dir", "marker_token_id")`.
         """
         model_name = model_name or OpenDecision.DEFAULT_MODEL
-        model_dir = _download_or_locate(model_name, "open_decision", required_file="config.json")
+
+        # If "open-decision-150m" or "open-decision-ai" is requested and isn't a local folder,
+        # resolve to its underlying 150M ModernBERT-base encoder on Hugging Face Hub
+        hub_target = (
+            OpenDecision.DEFAULT_BACKBONE
+            if (not os.path.isdir(model_name) and model_name.lower() in ("open-decision-150m", "open-decision-ai", "open-decision"))
+            else model_name
+        )
+
+        model_dir = _download_or_locate(hub_target, "open_decision", required_file="config.json")
 
         tok_dir = os.path.join(model_dir, "tokenizer") if os.path.isdir(os.path.join(model_dir, "tokenizer")) else model_dir
         tokenizer = AutoTokenizer.from_pretrained(tok_dir)
+
         config = _load_json_if_exists(os.path.join(model_dir, "open_decision.json"))
         if not config:
             config = _load_json_if_exists(os.path.join(model_dir, "config.json"))
         config.setdefault("model_family", "open_decision")
+        config.setdefault("model_id", model_name)
 
         print(f"Building OpenDecision model for '{model_name}'...")
+        backbone_cfg_path = os.path.join(model_dir, "backbone_config.json")
         enc_dir = os.path.join(model_dir, "encoder") if os.path.isdir(os.path.join(model_dir, "encoder")) else model_dir
-        encoder = AutoModel.from_pretrained(enc_dir)
-        hidden_size = int(getattr(encoder.config, "hidden_size", config.get("hidden_size", 768)))
 
+        if os.path.exists(backbone_cfg_path):
+            # Tokz-labs/OpenDecision-* layout: encoder config lives in backbone_config.json
+            enc_cfg = AutoConfig.from_pretrained(backbone_cfg_path)
+            encoder = AutoModel.from_config(enc_cfg)
+            weights_path = os.path.join(model_dir, "model.safetensors")
+            if os.path.exists(weights_path):
+                sd = load_file(weights_path)
+                enc_sd = {
+                    (k[len("backbone.") :] if k.startswith("backbone.") else (k[len("encoder.") :] if k.startswith("encoder.") else k)): v
+                    for k, v in sd.items()
+                }
+                encoder.load_state_dict(enc_sd, strict=False)
+        else:
+            encoder = AutoModel.from_pretrained(enc_dir)
+
+        hidden_size = int(getattr(encoder.config, "hidden_size", config.get("hidden_size", 768)))
         model = MarkerDecisionModelWrapper(encoder=encoder, hidden_size=hidden_size)
+
         resolved_marker_id = (
             marker_token_id
             if marker_token_id is not None
             else config.get("marker_token_id", config.get("option_marker_id"))
         )
+        if resolved_marker_id is None and getattr(tokenizer, "mask_token_id", None) is None:
+            resolved_marker_id = tokenizer.bos_token_id or tokenizer.eos_token_id or 0
 
         model.to(device)
         print(f"Loaded '{model_name}' for fine-tuning (device='{device}').")
