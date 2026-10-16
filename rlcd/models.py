@@ -303,6 +303,27 @@ class OpenDecision:
 
         model_dir = _download_or_locate(hub_target, "open_decision", required_file="config.json")
 
+        # Tokz-labs/OpenDecision-* compatibility: Hugging Face AutoTokenizer and AutoConfig require
+        # a `model_type` in config.json. Tokz-labs places model_type inside backbone_config.json.
+        # Patch config.json locally in cache if model_type is missing so HF utilities succeed.
+        cfg_file_path = os.path.join(model_dir, "config.json")
+        backbone_cfg_path = os.path.join(model_dir, "backbone_config.json")
+        if os.path.exists(cfg_file_path):
+            try:
+                with open(cfg_file_path, "r", encoding="utf-8") as f:
+                    raw_cfg = json.load(f)
+                if "model_type" not in raw_cfg:
+                    model_type_val = "deberta-v2"
+                    if os.path.exists(backbone_cfg_path):
+                        with open(backbone_cfg_path, "r", encoding="utf-8") as bf:
+                            raw_bcfg = json.load(bf)
+                            model_type_val = raw_bcfg.get("model_type", model_type_val)
+                    raw_cfg["model_type"] = model_type_val
+                    with open(cfg_file_path, "w", encoding="utf-8") as f:
+                        json.dump(raw_cfg, f, indent=2)
+            except Exception:
+                pass
+
         tok_dir = os.path.join(model_dir, "tokenizer") if os.path.isdir(os.path.join(model_dir, "tokenizer")) else model_dir
         try:
             tokenizer = AutoTokenizer.from_pretrained(tok_dir)
