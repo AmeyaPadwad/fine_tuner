@@ -1,5 +1,5 @@
 model,dataset,task,base_acc,final_acc,base_brier,final_brier,base_ece,final_ece
-wfzyx/von,Nexusflow/NexusRaven_API_evaluation,nexusraven_choice,0.253968,0.920635,-0.762286,-0.136683,0.097183,0.066609
-wfzyx/von,mteb/tweet_sentiment_extraction,tweet_sentiment_choice,0.410026,0.797419,-0.626362,-0.374581,0.089777,0.181247
-wfzyx/von,Anthropic/hh-rlhf,hh_rlhf_noul,0.501583,0.623083,-0.508800,-0.521898,0.064902,0.171527
-wfzyx/von,lmsys/toxic-chat,toxic_chat_score,0.453740,0.955709,-0.732795,-0.077795,0.189900,0.034496
+wfzyx/von,Nexusflow/NexusRaven_API_evaluation,nexusraven_choice,0.158730,0.809524,-0.829450,-0.287310,0.189060,0.120009
+wfzyx/von,mteb/tweet_sentiment_extraction,tweet_sentiment_choice,0.453423,0.805275,-0.663114,-0.361857,0.049786,0.172424
+wfzyx/von,Anthropic/hh-rlhf,hh_rlhf_noul,0.490333,0.620333,-0.514996,-0.530970,0.061073,0.184643
+wfzyx/von,lmsys/toxic-chat,toxic_chat_score,0.012795,0.948819,-0.912607,-0.087349,0.223415,0.039567
