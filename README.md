@@ -26,10 +26,11 @@ For a deep dive into how dataset preprocessing, model wrapping, the RLCD trainin
 
 ### 1. Installation
 
-Install the required dependencies from `requirements.txt`:
+Install the required dependencies and register the `rlcd` SDK + `rlcd-fine-tune` CLI command in your virtual environment:
 
 ```bash
 pip install -r requirements.txt
+pip install -e . --no-deps
 ```
 
 *(Note: To train on a CUDA GPU, install a CUDA-enabled build of PyTorch matching your system before or after installing `requirements.txt`.)*
@@ -40,21 +41,22 @@ Optionally, copy `.env.example` to `.env` and set `HF_TOKEN` if you are download
 cp .env.example .env
 ```
 
-### 2. Running the Fine-Tuning Pipeline
+### 2. Running the Fine-Tuning Pipeline (CLI & Python SDK)
 
-The primary entry point is `main.py`. You can run it directly with the default configuration at the top of `main.py`:
-
-```bash
-python main.py
-```
-
-Or override the model, dataset, subset size, column mapping, output directory, hardware device, or hyperparameter sweep via command-line arguments:
+Once installed, you can run the pipeline via the **`rlcd-fine-tune`** CLI command (or `python main.py`), where every hyperparameter and variable in `main.py` and `RLTrainingConfig` can be passed optionally (falling back to defaults when omitted):
 
 ```bash
-python main.py \
+# Run with default configuration
+rlcd-fine-tune
+
+# Or override any combination of model, dataset, subset, column_map, and RL hyperparameters:
+rlcd-fine-tune \
   --model convaiinnovations/laya \
   --dataset Salesforce/xlam-function-calling-60k \
   --subset 600 \
+  --epochs 2 \
+  --micro-batch-size 4 \
+  --lr-head 1e-4 \
   --output-dir ./outputs/laya_xlam \
   --device cuda
 ```
@@ -62,12 +64,31 @@ python main.py \
 Using a custom column mapping via CLI:
 
 ```bash
-python main.py \
+rlcd-fine-tune \
   --model wfzyx/von \
   --dataset mteb/tweet_sentiment_extraction \
   --column-map '{"context": "text", "target": "label_text", "decision_type": "choice"}' \
   --output-dir ./outputs/von_sentiment
 ```
+
+Using the **Python SDK (`import rlcd`)**:
+
+```python
+import rlcd
+
+result = rlcd.fine_tune(
+    model_name="wfzyx/von",
+    dataset_name="mteb/tweet_sentiment_extraction",
+    dataset_subset=500,
+    epochs=2,
+    micro_batch_size=4,
+    output_dir="./outputs/von_sentiment",
+)
+print(result["metrics"])
+```
+
+**Agent Skill (`skills/rlcd-fine-tune/SKILL.md`)**:  
+An agent-ready skill specification is included at [`skills/rlcd-fine-tune/SKILL.md`](./skills/rlcd-fine-tune/SKILL.md) so AI coding agents can autonomously inspect datasets, configure `rlcd-fine-tune` / `rlcd.fine_tune(...)`, and verify evaluation metrics. See [`tests/test_agent.md`](./tests/test_agent.md) for the 3-phase agent verification plan.
 
 Running a multi-GPU distributed job with `torchrun`:
 
