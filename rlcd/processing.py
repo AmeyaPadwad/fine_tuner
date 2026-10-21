@@ -16,6 +16,7 @@ The pipeline is organized into five logical groups:
     5. Batch Collation & Dataset Splitting
 """
 
+import ast
 import json
 import random
 import re
@@ -122,7 +123,10 @@ def _parse_row_options(raw_options: Any, context_text: str = "") -> List[str]:
             try:
                 parsed = json.loads(raw_str)
             except Exception:
-                parsed = None
+                try:
+                    parsed = ast.literal_eval(raw_str)
+                except Exception:
+                    parsed = None
         else:
             fn_names = _extract_functions_from_text(raw_str)
             if fn_names:
@@ -601,6 +605,7 @@ def resolve_schema_and_columns(
         else:
             target_candidates = (
                 "label_text",
+                "python_function_name",
                 "answers",
                 "answer",
                 "tool_calls",
@@ -626,7 +631,7 @@ def resolve_schema_and_columns(
     if "options" in mapping and mapping["options"] is not None:
         options_source = mapping["options"]
     else:
-        opt_candidates = ("tools", "functions", "options", "choices", "candidates")
+        opt_candidates = ("tools", "functions", "context_functions", "options", "choices", "candidates")
         options_source = next((c for c in opt_candidates if c in keys and c != target_col), None)
         if options_source is None and isinstance(ctx_cols, list) and len(ctx_cols) == 1:
             sample_ctx = str(sample0.get(ctx_cols[0], ""))
