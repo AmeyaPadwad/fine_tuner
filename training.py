@@ -1,4 +1,4 @@
-"""Reinforcement Learning (RL) fine-tuning loop for Laya decision models.
+"""Reinforcement Learning (RL) fine-tuning loop for decision models.
 
 Implements the RL training pipeline based on the Laya 2xT4 Kaggle fine-tuning
 methodology (https://github.com/NandhaKishorM/laya/blob/main/notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb):
@@ -9,7 +9,7 @@ methodology (https://github.com/NandhaKishorM/laya/blob/main/notebooks/laya_fine
     - Cosine annealing learning rate scheduling and gradient accumulation.
     - Held-out post-training temperature calibration (L-BFGS optimization per
       decision type: choice, score, noul).
-    - Rolling checkpoints and final Laya-agent artifact export.
+    - Rolling checkpoints and final agent artifact export.
     - Test split benchmark evaluation (Accuracy, Soft Acc, Brier, ECE, MAE).
     - Distributed Data Parallel (DDP via torchrun) and single-device (GPU/CPU)
       execution.
@@ -44,7 +44,7 @@ from helper import save_final_model
 
 @dataclass
 class RLTrainingConfig:
-    """Hyperparameters and runtime settings for Laya RL fine-tuning."""
+    """Hyperparameters and runtime settings for RL fine-tuning."""
 
     # Model & Checkpoint Paths
     model_name_or_path: str = os.getenv("DEFAULT_LAYA_MODEL", "convaiinnovations/laya")
@@ -206,7 +206,7 @@ def compute_rl_step(
 # ---------------------------------------------------------------------------
 
 class RLTrainer:
-    """End-to-end Reinforcement Learning Trainer for Laya models."""
+    """End-to-end Reinforcement Learning Trainer for Decision models."""
 
     def __init__(
         self,
@@ -560,7 +560,7 @@ class RLTrainer:
                 output_dir=cfg.output_dir,
                 fitted_temperatures=fitted_temps,
             )
-            print(f"\nFine-tuned Laya model successfully saved to: {final_path}")
+            print(f"\nFine-tuned model successfully saved to: {final_path}")
 
             # Clean up intermediate rolling checkpoint after final export to save disk space
             rolling_dir = os.path.join(cfg.output_dir, "checkpoint_latest")

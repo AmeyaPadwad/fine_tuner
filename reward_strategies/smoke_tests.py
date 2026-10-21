@@ -3,7 +3,7 @@
 Run directly with:
     python smoke_tests.py
 """
-from brier import Brier
+from reward_strategies.brier import Brier
 
 
 class BrierSmokeTests:
