@@ -294,7 +294,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def cli_entry(argv: Optional[List[str]] = None) -> Dict[str, Any]:
+def cli_entry(argv: Optional[List[str]] = None) -> int:
     """CLI entry point registered as `rlcd-fine-tune`."""
     parser = build_arg_parser()
     cli_args, _ = parser.parse_known_args(argv)
@@ -302,7 +302,7 @@ def cli_entry(argv: Optional[List[str]] = None) -> Dict[str, Any]:
     parsed_col_map = json.loads(cli_args.column_map) if cli_args.column_map else COLUMN_MAP
     parsed_grid = json.loads(cli_args.param_grid) if cli_args.param_grid else None
 
-    return main(
+    main(
         run_sweep=cli_args.run_sweep,
         param_grid=parsed_grid,
         model_name=cli_args.model_name,
@@ -338,6 +338,7 @@ def cli_entry(argv: Optional[List[str]] = None) -> Dict[str, Any]:
         device=cli_args.device,
         fp16=cli_args.fp16,
     )
+    return 0
 
 
 if __name__ == "__main__":
