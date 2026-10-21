@@ -453,12 +453,71 @@ class TrainingSmokeTests:
             print(f"FAIL: RLTrainer.train raised {type(e).__name__}: {e}")
             return False
 
+    def test_post_hoc_calibration(self):
+        print("\n=== Smoke test: RLTrainer.calibrate & save_final_model compatibility ===")
+        try:
+            from training import RLTrainer, RLTrainingConfig
+            from helper import TemperatureScaling, VectorScaling, MatrixScaling, _fit_calibrator_lbfgs, _evaluate_calibrated_logits
+            class MockTokenizer:
+                pad_token_id = 0
+                def save_pretrained(self, path):
+                    os.makedirs(path, exist_ok=True)
+            class MockDecisionModel(nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.head = nn.Linear(4, 3)
+                def forward(self, input_ids, attention_mask, marker_pos, marker_mask, qtype):
+                    b = input_ids.size(0)
+                    # Deterministic overconfident logits matching target class 0 or 1
+                    logits = torch.tensor([[3.5, -1.0, -1.5], [-1.2, 3.8, -1.0]], dtype=torch.float32)[:b]
+                    if b > 2:
+                        logits = logits.repeat((b + 1) // 2, 1)[:b]
+                    act = torch.zeros(b, 3)
+                    return logits, act
+
+            cfg = RLTrainingConfig(device="cpu", calib_batch_size=8, calib_seed=42)
+            trainer = RLTrainer(
+                config=cfg,
+                model=MockDecisionModel(),
+                tokenizer=MockTokenizer(),
+                agent_config={"model_name": "mock"},
+            )
+
+            calib_items = []
+            for i in range(20):
+                t = [1.0, 0.0, 0.0] if i % 2 == 0 else [0.0, 1.0, 0.0]
+                calib_items.append({
+                    "ids": [10, 11, 12, 13],
+                    "markers": [1, 2, 3],
+                    "qtype": 0,
+                    "target": t,
+                    "label": i % 2,
+                })
+
+            res = trainer.calibrate(calib_items)
+            assert trainer.calibrator is not None
+            assert isinstance(trainer.calibrator, (TemperatureScaling, VectorScaling, MatrixScaling))
+            assert len(res["fitted_temperatures"]) == 3
+            assert res["summary"]["selected_strategy"] in (
+                "Temperature Scaling",
+                "Platt / Vector Scaling",
+                "Matrix Scaling",
+            )
+            eval_metrics = trainer.evaluate(calib_items[:6])
+            assert "ece" in eval_metrics and "mean_brier" in eval_metrics
+            print(f"PASS: RLTrainer.calibrate selected '{res['summary']['selected_strategy']}' and calibrated evaluation succeeded.")
+            return True
+        except Exception as e:
+            print(f"FAIL: test_post_hoc_calibration raised {type(e).__name__}: {e}")
+            return False
+
     def run_all(self):
         """Runs all smoke tests for this class."""
         results = {
             "compute_rewards": self.test_compute_rewards(),
             "compute_rl_step": self.test_compute_rl_step(),
-            "train": self.test_train()
+            "train": self.test_train(),
+            "post_hoc_calibration": self.test_post_hoc_calibration(),
         }
         print("\n--- RL Training Smoke Test Summary ---")
         for name, passed in results.items():

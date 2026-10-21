@@ -33,9 +33,16 @@ from transformers import AutoTokenizer
 # Relative functions
 from models import DecisionModel
 from reward_strategies.brier import Brier
-from helper import save_rolling_checkpoint
+from helper import (
+    save_rolling_checkpoint,
+    save_final_model,
+    TemperatureScaling,
+    VectorScaling,
+    MatrixScaling,
+    _fit_calibrator_lbfgs,
+    _evaluate_calibrated_logits,
+)
 from processing import collate_train_batch
-from helper import save_final_model
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +208,7 @@ def compute_rl_step(
 
     return total_loss, float(loss_rl.item()), float(loss_ce.item()), mean_reward
 
+
 # ---------------------------------------------------------------------------
 # High-Level RL Trainer Class
 # ---------------------------------------------------------------------------
@@ -227,6 +235,8 @@ class RLTrainer:
         """
         self.config = config or RLTrainingConfig()
         self.custom_reward_fn = custom_reward_fn
+        self.calibrator: Optional[nn.Module] = None
+        self.calibration_info: Optional[Dict[str, Any]] = None
 
         # Setup distributed environment
         self._init_distributed()
@@ -543,22 +553,29 @@ class RLTrainer:
         if self.is_distributed:
             dist.barrier()
 
-        # 5. Save final fine-tuned model package (rank 0 only)
+        # 5. Post-Hoc Calibration & Final Model Package Export (rank 0 only)
         if self.rank == 0:
-            print("\nSaving final model package...")
             del optimizer, scheduler
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            # Pass default uncalibrated temperatures
-            fitted_temps = [1.2, 1.2, 1.2]
-            
+            if calib_items:
+                print(f"\n=== Running Post-Hoc Calibration on {len(calib_items)} Held-Out Calibration Items ===")
+                calib_result = self.calibrate(calib_items)
+                fitted_temps = calib_result["fitted_temperatures"]
+                metrics["post_hoc_calibration"] = self.calibration_info
+            else:
+                fitted_temps = [1.2, 1.2, 1.2]
+
+            print("\nSaving final model package...")
             final_path = save_final_model(
                 model=self.model,
                 tok=self.tokenizer,
                 cfg=self.agent_config,
                 output_dir=cfg.output_dir,
                 fitted_temperatures=fitted_temps,
+                calibrator=self.calibrator,
+                calibration_info=self.calibration_info,
             )
             print(f"\nFine-tuned model successfully saved to: {final_path}")
 
@@ -594,6 +611,284 @@ class RLTrainer:
 
         return {"output_dir": cfg.output_dir, "metrics": metrics}
 
+    def calibrate(
+        self,
+        calib_items: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Run holdout-validated post-hoc calibration on calib_items.
+
+        Evaluates the three calibration strategies:
+            1. Temperature Scaling (1 scalar parameter T)
+            2. Platt / Vector Scaling (2*K diagonal affine parameters)
+            3. Matrix Scaling (K^2 + K linear parameters)
+
+        Uses an internal 70/30 fit/validation split of `calib_items` to select
+        the best calibration strategy without overfitting selection bias (never
+        selecting an uncalibrated baseline), refits the winning strategy on 100%
+        of `calib_items`, and computes per-primitive temperatures for
+        `save_final_model` compatibility.
+        """
+        if not calib_items:
+            default_temps = [1.2, 1.2, 1.2]
+            self.calibrator = None
+            self.calibration_info = None
+            return {"fitted_temperatures": default_temps, "calibrator": None, "summary": None}
+
+        model = self.model
+        model.eval()
+        calib_bs = max(1, min(self.config.calib_batch_size, len(calib_items)))
+        use_amp = self.config.fp16 and (self.device.type == "cuda")
+
+        batch_logits_list: List[torch.Tensor] = []
+        batch_targets_list: List[torch.Tensor] = []
+        batch_masks_list: List[torch.Tensor] = []
+        batch_qtypes_list: List[torch.Tensor] = []
+        max_k = 0
+
+        with torch.no_grad():
+            for b_idx in range(0, len(calib_items), calib_bs):
+                chunk = calib_items[b_idx : b_idx + calib_bs]
+                if not chunk:
+                    continue
+                batch = collate_train_batch(chunk, self.tokenizer.pad_token_id)
+                input_ids = batch["input_ids"].to(self.device)
+                attention_mask = batch["attention_mask"].to(self.device)
+                marker_pos = batch["marker_pos"].to(self.device)
+                marker_mask = batch["marker_mask"].to(self.device)
+                qtype = batch["qtype"].to(self.device)
+                target = batch["target"].to(self.device)
+
+                if use_amp:
+                    with torch.autocast("cuda", dtype=torch.float16):
+                        logits, _ = model(input_ids, attention_mask, marker_pos, marker_mask, qtype)
+                else:
+                    logits, _ = model(input_ids, attention_mask, marker_pos, marker_mask, qtype)
+
+                logits = logits.float().detach().cpu()
+                target_cpu = target.float().detach().cpu()
+                mask_cpu = marker_mask.bool().detach().cpu()
+                qtype_cpu = qtype.long().detach().cpu()
+
+                max_k = max(max_k, logits.size(-1))
+                batch_logits_list.append(logits)
+                batch_targets_list.append(target_cpu)
+                batch_masks_list.append(mask_cpu)
+                batch_qtypes_list.append(qtype_cpu)
+
+        # Pad across batches to uniform max_k
+        padded_logits, padded_targets, padded_masks = [], [], []
+        for l_t, t_t, m_t in zip(batch_logits_list, batch_targets_list, batch_masks_list):
+            k_cur = l_t.size(-1)
+            if k_cur < max_k:
+                pad_k = max_k - k_cur
+                b_sz = l_t.size(0)
+                l_t = torch.cat([l_t, torch.full((b_sz, pad_k), -1e4, dtype=l_t.dtype)], dim=-1)
+                t_t = torch.cat([t_t, torch.zeros((b_sz, pad_k), dtype=t_t.dtype)], dim=-1)
+                m_t = torch.cat([m_t, torch.zeros((b_sz, pad_k), dtype=torch.bool)], dim=-1)
+            padded_logits.append(l_t)
+            padded_targets.append(t_t)
+            padded_masks.append(m_t)
+
+        all_logits = torch.cat(padded_logits, dim=0)
+        all_targets = torch.cat(padded_targets, dim=0)
+        all_masks = torch.cat(padded_masks, dim=0)
+        all_qtypes = torch.cat(batch_qtypes_list, dim=0)
+
+        n_total = len(all_logits)
+        num_classes = max_k
+
+        # Check whether option count K is uniform across all calibration items
+        active_counts = all_masks.sum(dim=-1)
+        uniform_k = bool((active_counts == num_classes).all().item())
+
+        # Internal Holdout Split (70% fit / 30% validation) to prevent overfitting selection bias
+        g = torch.Generator()
+        g.manual_seed(self.config.calib_seed)
+        perm = torch.randperm(n_total, generator=g)
+
+        if n_total >= 4:
+            n_fit = max(2, int(round(n_total * 0.70)))
+            n_fit = min(n_fit, n_total - 1)
+            fit_idx = perm[:n_fit]
+            val_idx = perm[n_fit:]
+        else:
+            fit_idx = perm
+            val_idx = perm
+
+        fit_logits, fit_targets, fit_masks = all_logits[fit_idx], all_targets[fit_idx], all_masks[fit_idx]
+        val_logits, val_targets, val_masks, val_qtypes = (
+            all_logits[val_idx],
+            all_targets[val_idx],
+            all_masks[val_idx],
+            all_qtypes[val_idx],
+        )
+
+        # Candidate builders & eligibility guards (only calibrated strategies compete)
+        candidates_spec = [
+            {
+                "name": "Temperature Scaling",
+                "params": 1,
+                "builder": lambda: TemperatureScaling(init_temp=1.5),
+                "eligible": True,
+                "reason": "Universal 1-parameter scalar scaling (preserves 100% of top-1 rankings)",
+            },
+            {
+                "name": "Platt / Vector Scaling",
+                "params": 2 * num_classes,
+                "builder": lambda: VectorScaling(num_classes=num_classes),
+                "eligible": uniform_k and (len(fit_idx) >= 2 * num_classes),
+                "reason": (
+                    "Diagonal affine scaling (corrects class imbalance)"
+                    if (uniform_k and len(fit_idx) >= 2 * num_classes)
+                    else f"Skipped: requires uniform option count and >= {2 * num_classes} fit samples (got {len(fit_idx)})"
+                ),
+            },
+            {
+                "name": "Matrix Scaling",
+                "params": (num_classes ** 2) + num_classes,
+                "builder": lambda: MatrixScaling(num_classes=num_classes),
+                "eligible": uniform_k and (len(fit_idx) >= 2 * ((num_classes ** 2) + num_classes)),
+                "reason": (
+                    "Full linear matrix scaling (captures inter-class correlations)"
+                    if (uniform_k and len(fit_idx) >= 2 * ((num_classes ** 2) + num_classes))
+                    else f"Skipped: requires uniform option count and >= {2 * ((num_classes ** 2) + num_classes)} fit samples to prevent overfitting (got {len(fit_idx)})"
+                ),
+            },
+        ]
+
+        evaluated_candidates = []
+        best_spec = None
+        best_val_score = -float("inf")
+        temp_val_acc = 0.0
+
+        for spec in candidates_spec:
+            if not spec["eligible"]:
+                evaluated_candidates.append(
+                    {
+                        "strategy": spec["name"],
+                        "params": spec["params"],
+                        "eligible": False,
+                        "notes": spec["reason"],
+                    }
+                )
+                continue
+
+            t0 = time.time()
+            cand_module = spec["builder"]()
+            _fit_calibrator_lbfgs(cand_module, fit_logits, fit_targets, fit_masks)
+            fit_time = time.time() - t0
+
+            with torch.no_grad():
+                val_cal_logits = cand_module(val_logits)
+            val_metrics = _evaluate_calibrated_logits(
+                val_cal_logits,
+                val_targets,
+                val_qtypes,
+                val_masks,
+                reward_strategy=self.config.reward_strategy,
+                custom_reward_fn=self.custom_reward_fn,
+            )
+
+            if spec["name"] == "Temperature Scaling":
+                temp_val_acc = val_metrics["accuracy"]
+
+            # Selection objective on held-out calibration validation split:
+            # Maximize Mean Brier (which is negative, closer to 0 is better) and minimize ECE,
+            # while guarding against validation accuracy degradation relative to Temperature Scaling.
+            acc_penalty = max(0.0, temp_val_acc - val_metrics["accuracy"]) * 2.0
+            val_score = val_metrics["mean_brier"] - val_metrics["ece"] - acc_penalty
+
+            record = {
+                "strategy": spec["name"],
+                "params": spec["params"],
+                "eligible": True,
+                "val_accuracy": val_metrics["accuracy"],
+                "val_ece": val_metrics["ece"],
+                "val_mean_brier": val_metrics["mean_brier"],
+                "val_nll": val_metrics["nll"],
+                "val_score": float(val_score),
+                "fit_time_s": float(fit_time),
+                "notes": spec["reason"],
+            }
+            evaluated_candidates.append(record)
+
+            if val_score > best_val_score:
+                best_val_score = val_score
+                best_spec = spec
+
+        # Refit the winning calibration strategy on 100% of calib_items
+        t_refit = time.time()
+        winning_calibrator = best_spec["builder"]()
+        _fit_calibrator_lbfgs(winning_calibrator, all_logits, all_targets, all_masks)
+        refit_time = time.time() - t_refit
+
+        with torch.no_grad():
+            full_cal_logits = winning_calibrator(all_logits)
+        full_calib_metrics = _evaluate_calibrated_logits(
+            full_cal_logits,
+            all_targets,
+            all_qtypes,
+            all_masks,
+            reward_strategy=self.config.reward_strategy,
+            custom_reward_fn=self.custom_reward_fn,
+        )
+
+        # Fit per-primitive scalar temperatures [T_choice, T_score, T_noul] for save_final_model compatibility
+        global_temp_module = TemperatureScaling(init_temp=1.5)
+        _fit_calibrator_lbfgs(global_temp_module, all_logits, all_targets, all_masks)
+        global_temp = round(global_temp_module.get_temperature(), 4)
+
+        fitted_temperatures: List[float] = []
+        for q_id in (0, 1, 2):
+            q_mask = all_qtypes == q_id
+            if q_mask.sum().item() >= 2:
+                q_temp_mod = TemperatureScaling(init_temp=global_temp)
+                _fit_calibrator_lbfgs(q_temp_mod, all_logits[q_mask], all_targets[q_mask], all_masks[q_mask])
+                fitted_temperatures.append(round(q_temp_mod.get_temperature(), 4))
+            else:
+                fitted_temperatures.append(global_temp)
+
+        self.calibrator = winning_calibrator.to(self.device)
+        self.calibrator.eval()
+
+        self.calibration_info = {
+            "selected_strategy": best_spec["name"],
+            "selected_params": best_spec["params"],
+            "n_calib_total": n_total,
+            "n_calib_fit": int(len(fit_idx)),
+            "n_calib_val": int(len(val_idx)),
+            "fitted_temperatures": fitted_temperatures,
+            "refit_time_s": round(refit_time, 4),
+            "full_calib_metrics": full_calib_metrics,
+            "candidates": evaluated_candidates,
+        }
+
+        # Print calibration summary table
+        print("-" * 98)
+        print(f"{'Post-Hoc Calibration Strategy':<30} | {'Params':<6} | {'Val Acc':<9} | {'Val ECE':<9} | {'Val Brier':<10} | {'Status'}")
+        print("-" * 98)
+        for c in evaluated_candidates:
+            if not c["eligible"]:
+                print(f"{c['strategy']:<30} | {c['params']:<6} | {'N/A':<9} | {'N/A':<9} | {'N/A':<10} | {c['notes']}")
+            else:
+                is_sel = "SELECTED" if c["strategy"] == best_spec["name"] else "Evaluated"
+                print(
+                    f"{c['strategy']:<30} | {c['params']:<6} | "
+                    f"{c['val_accuracy']:>7.2%}  | {c['val_ece']:>7.2%}  | "
+                    f"{c['val_mean_brier']:>10.4f} | {is_sel} ({c['fit_time_s']:.2f}s)"
+                )
+        print("-" * 98)
+        print(
+            f"Selected Post-Hoc Calibrator: {best_spec['name']} "
+            f"(fitted_temperatures={fitted_temperatures})"
+        )
+
+        return {
+            "fitted_temperatures": fitted_temperatures,
+            "calibrator": self.calibrator,
+            "summary": self.calibration_info,
+        }
+
     def evaluate(
         self,
         eval_items: List[Dict[str, Any]],
@@ -601,12 +896,15 @@ class RLTrainer:
     ) -> Dict[str, Any]:
         """Evaluate the model on held-out test items.
         Computes Accuracy, Mean Brier Score, and Expected Calibration Error (ECE).
+        Automatically applies `self.calibrator` when post-hoc calibration has been fitted.
         """
         if not eval_items:
             return {"accuracy": 0.0, "mean_brier": 0.0, "ece": 0.0, "n_items": 0}
 
         model = self.model
         model.eval()
+        if self.calibrator is not None:
+            self.calibrator.eval()
         eval_bs = min(batch_size, max(4, self.config.micro_batch_size * 2))
         use_amp = self.config.fp16 and (self.device.type == "cuda")
 
@@ -637,6 +935,8 @@ class RLTrainer:
                 else:
                     logits, _ = model(input_ids, attention_mask, marker_pos, marker_mask, qtype)
                 logits = logits.float()
+                if self.calibrator is not None:
+                    logits = self.calibrator(logits)
                 probs = torch.softmax(logits.masked_fill(~marker_mask, -1e4), -1)
 
                 r = compute_rewards(

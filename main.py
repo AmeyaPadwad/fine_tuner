@@ -34,7 +34,7 @@ REWARD_STRATEGY = "brier"
 #### Split ratios ####
 TEST_RATIO = 0.20    # 20% held out for evaluation (Accuracy, Brier, ECE)
 CALIB_RATIO = 0.10   # 10% held out for temperature calibration
-CALIB_MAX = 20       # Max items to withhold for calibration
+CALIB_MAX = 400       # Max items to withhold for calibration
 SPLIT_SEED = 42
 ################################
 
