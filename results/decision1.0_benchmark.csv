@@ -1,0 +1,5 @@
+model,dataset,task,base_acc,final_acc,base_brier,final_brier,base_ece,final_ece
+vllm-sr/Decision-1.0-Lex-0.6B,Nexusflow/NexusRaven_API_evaluation,nexusraven_choice,0.253968254,0.587301587,-0.775390103,-0.543012233,0.178432738,0.124828641
+vllm-sr/Decision-1.0-Lex-0.6B,mteb/tweet_sentiment_extraction,tweet_sentiment_choice,0.465394688,0.794986906,-0.635694458,-0.368674855,0.080445132,0.173785175
+vllm-sr/Decision-1.0-Lex-0.6B,lmsys/toxic-chat,toxic_chat_score,0.096456693,0.94980315,-0.827222252,-0.087582588,0.147820467,0.040104966
+vllm-sr/Decision-1.0-Lex-0.6B,Anthropic/hh-rlhf,hh_rlhf_noul,0.491416667,0.57125,-0.513198604,-0.489379832,0.067668137,0.044470762
