@@ -12,3 +12,7 @@ dist/
 build/
 *.onnx
 *.bin
+.arkenos
+.cache
+.optimus
+.claude

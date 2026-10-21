@@ -2,7 +2,7 @@
 
 An end-to-end fine-tuning pipeline that takes **any dataset** and **any open-weight System One decision model** as input and fine-tunes it using **Reinforcement Learning with Calibrated Decisions (RLCD)**.
 
-Unlike standard supervised fine-tuning (SFT), which optimizes solely for token-level cross-entropy and often produces overconfident probability estimates, RLCD combines **Group Relative Policy Optimization (GRPO)** with **strictly proper scoring rules** (such as the negative Brier score) and post-training temperature scaling. The result is a decision model optimized for both **high predictive accuracy** and **well-calibrated confidence scores** across discrete choices (`choice`), binary guardrails (`noul`), and continuous ratings (`score`).
+Unlike standard supervised fine-tuning (SFT), which optimizes solely for token-level cross-entropy and often produces overconfident probability estimates, RLCD combines **Group Relative Policy Optimization (GRPO)** with **strictly proper scoring rules** (such as the negative Brier score) and **holdout-validated post-hoc calibration** (automatically selecting the best strategy among Temperature Scaling, Platt / Vector Scaling, and Matrix Scaling). The result is a decision model optimized for both **high predictive accuracy** and **well-calibrated confidence scores** across discrete choices (`choice`), binary guardrails (`noul`), and continuous ratings (`score`).
 
 For a deep dive into how dataset preprocessing, model wrapping, the RLCD training loop, evaluation, and the repository directory structure work under the hood, see **[`rlcd_README.md`](./rlcd_README.md)**.
 
@@ -144,9 +144,9 @@ The `RLTrainingConfig` dataclass in `training.py` exposes the following paramete
 
 ### Calibration Holdout Settings
 
-- `calib_max`: The maximum number of dataset items to withhold from training for post-hoc temperature calibration.
+- `calib_max`: The maximum number of dataset items to withhold from training for holdout-validated post-hoc calibration (`TemperatureScaling`, `VectorScaling`, `MatrixScaling`).
 - `calib_ratio`: The percentage of the dataset to withhold for calibration if `calib_max` isn't hit first.
-- `calib_seed`: The fixed random seed used to consistently shuffle and select the calibration holdout items.
+- `calib_seed`: The fixed random seed used to consistently shuffle and partition the calibration holdout items (including the internal 70/30 fit/validation split used for calibrator selection).
 - `calib_batch_size`: The batch size to use during the post-training calibration inference loop.
 
 ### Environment

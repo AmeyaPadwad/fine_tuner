@@ -196,20 +196,31 @@ def save_final_model(
 
 class TemperatureScaling(nn.Module):
     """Temperature Scaling (Guo et al., 2017).
-    Divides logits by a single learned positive scalar T.
+    Divides logits by a single learned positive scalar T in [min_temp, max_temp].
+    Parameterized smoothly in unconstrained log/logit space so L-BFGS never hits
+    a zero-gradient hard clamp boundary.
     Preserves 100% of top-1 prediction rankings and classification accuracy.
     """
 
-    def __init__(self, init_temp: float = 1.5):
+    def __init__(self, init_temp: float = 1.2, min_temp: float = 0.5, max_temp: float = 5.0):
         super().__init__()
-        self.temperature = nn.Parameter(torch.ones(1) * init_temp)
+        self.min_temp = float(min_temp)
+        self.max_temp = float(max_temp)
+        clamped_init = min(max(float(init_temp), self.min_temp + 1e-3), self.max_temp - 1e-3)
+        ratio = (clamped_init - self.min_temp) / (self.max_temp - self.min_temp)
+        init_raw = torch.logit(torch.tensor([ratio], dtype=torch.float32))
+        self.raw_temp = nn.Parameter(init_raw)
+
+    def _compute_temp(self) -> torch.Tensor:
+        return self.min_temp + (self.max_temp - self.min_temp) * torch.sigmoid(self.raw_temp)
 
     def forward(self, logits: torch.Tensor) -> torch.Tensor:
-        t = self.temperature.clamp(min=0.01, max=10.0)
+        t = self._compute_temp().to(device=logits.device, dtype=logits.dtype)
         return logits / t
 
     def get_temperature(self) -> float:
-        return float(self.temperature.clamp(min=0.01, max=10.0).item())
+        with torch.no_grad():
+            return float(self._compute_temp().item())
 
 
 class VectorScaling(nn.Module):
@@ -264,27 +275,50 @@ def _fit_calibrator_lbfgs(
     mask: torch.Tensor,
     max_iter: int = 100,
     lr: float = 0.05,
-    l2_reg: float = 1e-3,
+    l2_reg: float = 1e-2,
 ) -> nn.Module:
-    """Fit a post-hoc calibrator module on soft/one-hot target distributions using L-BFGS."""
+    """Fit a post-hoc calibrator module on soft/one-hot target distributions using L-BFGS.
+
+    Optimizes a proper scoring composite (NLL + Brier score) with sample-size-aware
+    L2 regularization toward the identity transform (T=1.0 or W=I, b=0) so small
+    calibration splits cannot collapse into extreme overconfidence.
+    """
     if logits.numel() == 0 or len(logits) == 0:
         return calibrator
 
-    optimizer = torch.optim.LBFGS(calibrator.parameters(), lr=lr, max_iter=max_iter)
+    n_samples = max(1, len(logits))
+    # Scale regularization inversely with calibration sample count on small splits
+    adaptive_reg = l2_reg * max(1.0, 50.0 / float(n_samples))
+
+    optimizer = torch.optim.LBFGS(
+        calibrator.parameters(),
+        lr=lr,
+        max_iter=max_iter,
+        line_search_fn="strong_wolfe",
+    )
 
     def closure():
         optimizer.zero_grad()
         cal_logits = calibrator(logits)
         masked_logits = cal_logits.masked_fill(~mask, -1e4)
         log_probs = torch.log_softmax(masked_logits, dim=-1)
-        loss = -(targets * log_probs * mask.float()).sum(dim=-1).mean()
-        if isinstance(calibrator, VectorScaling):
+        probs = torch.softmax(masked_logits, dim=-1)
+
+        nll_loss = -(targets * log_probs * mask.float()).sum(dim=-1).mean()
+        brier_loss = (((probs - targets) ** 2) * mask.float()).sum(dim=-1).mean()
+        loss = nll_loss + brier_loss
+
+        if isinstance(calibrator, TemperatureScaling):
+            t_val = calibrator._compute_temp()
+            reg = ((t_val - 1.0) ** 2).mean()
+            loss = loss + adaptive_reg * reg
+        elif isinstance(calibrator, VectorScaling):
             reg = ((calibrator.scale - 1.0) ** 2).mean() + (calibrator.bias ** 2).mean()
-            loss = loss + l2_reg * reg
+            loss = loss + adaptive_reg * reg
         elif isinstance(calibrator, MatrixScaling):
             eye = torch.eye(calibrator.num_classes, device=logits.device, dtype=logits.dtype)
             reg = ((calibrator.linear.weight - eye) ** 2).mean() + (calibrator.linear.bias ** 2).mean()
-            loss = loss + l2_reg * reg
+            loss = loss + adaptive_reg * reg
         loss.backward()
         return loss
 

@@ -15,8 +15,8 @@ All core pipeline modules live at the root of the repository for direct executio
 ├── main.py                        # End-to-end CLI entry point (dataset load -> preprocess -> train -> evaluate)
 ├── processing.py                  # Dataset- & model-agnostic schema resolution, tokenization, marker alignment & splitting
 ├── models.py                      # Unified DecisionModel router, model loaders (Laya, Von, OpenDecision, Typical, Decision1) & wrapper
-├── training.py                    # RLTrainer, RLTrainingConfig, GRPO step, temperature calibration, and evaluation
-├── helper.py                      # Hugging Face Hub auth, multi-config dataset loading, and checkpoint/final model export
+├── training.py                    # RLTrainer, RLTrainingConfig, GRPO step, holdout-validated post-hoc calibration, and evaluation
+├── helper.py                      # HF Hub auth, dataset loading, post-hoc calibrator modules (Temperature/Vector/Matrix), and model export
 ├── reward_strategies/             # Proper scoring rule reward implementations
 │   ├── brier.py                   # Vectorized negative Brier score reward (choice, noul, score)
 │   ├── RLCD Reward Strategies.md  # Mathematical notes on proper scoring rules for RLCD
@@ -36,8 +36,8 @@ All core pipeline modules live at the root of the repository for direct executio
 - **`main.py`**: Orchestrates the pipeline lifecycle—authenticates with Hugging Face Hub, initializes `RLTrainer` (and any distributed process group), loads and subsets the dataset safely across ranks, runs `auto_prepare_dataset` and `prepare_dataset_items`, splits data into Train / Calibration / Test sets, and launches either `trainer.train()` or `trainer.hyperparameter_sweep()`.
 - **`processing.py`**: Converts arbitrary raw datasets into padded PyTorch tensors with `[MASK]` or model-specific option markers.
 - **`models.py`**: Abstracts architectural differences across bidirectional encoders (ModernBERT/BERT) and causal backbones (Qwen/Lex), exposing a single forward signature for training and inference.
-- **`training.py`**: Implements the GRPO reinforcement learning loop, Gaussian logit exploration, advantage normalization, soft cross-entropy blending, L-BFGS post-hoc temperature scaling, and held-out test evaluation.
-- **`helper.py`**: Manages Hugging Face Hub authentication (`hf_login`), dataset fetching with automatic config selection for multi-config repositories (`load_dataset`), rolling checkpoint management (`save_rolling_checkpoint`), and final package export (`save_final_model`).
+- **`training.py`**: Implements the GRPO reinforcement learning loop, Gaussian logit exploration, advantage normalization, soft cross-entropy blending, holdout-validated post-hoc calibration (`RLTrainer.calibrate`), and held-out test evaluation.
+- **`helper.py`**: Manages Hugging Face Hub authentication (`hf_login`), dataset fetching with automatic config selection for multi-config repositories (`load_dataset`), the post-hoc calibrator modules and L-BFGS fitting/evaluation helpers (`TemperatureScaling`, `VectorScaling`, `MatrixScaling`, `_fit_calibrator_lbfgs`, `_evaluate_calibrated_logits`), rolling checkpoint management (`save_rolling_checkpoint`), and final package export (`save_final_model`).
 
 ---
 
@@ -120,25 +120,31 @@ For every micro-batch in `RLTrainer.train()`:
    - The trainer combines the advantage-weighted policy gradient loss with a soft cross-entropy guidance term (`ce_weight`) and activation regularization (`act_reg_weight`):
      $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{PG}}(A, \tilde{z}, z) + \lambda_{\text{CE}}\,\mathcal{L}_{\text{CE}}(z, y) + \lambda_{\text{reg}}\,\mathcal{L}_{\text{act}}$$
    - Gradients are accumulated over `grad_accum_steps`, clipped to `max_grad_norm`, and applied using AdamW with **differential learning rates**—a higher learning rate (`lr_head = 1e-4`) for the decision head and a conservative learning rate (`lr_encoder = 2.5e-5`) with cosine decay for the pretrained backbone.
-6. **Post-Training Temperature Calibration (`calibrate`)**:
-   - After epoch training finishes, the trainer runs inference on the held-out **Calibration** split (`calib_items`) and uses L-BFGS to fit per-primitive temperature scalars (`T_choice`, `T_score`, `T_noul`) that minimize NLL/Brier error on unseen data without altering the relative ranking of options.
+6. **Holdout-Validated Post-Hoc Calibration (`RLTrainer.calibrate` & `helper.py`)**:
+   - After epoch training finishes, the trainer runs a single no-grad forward pass over the held-out **Calibration** split (`calib_items`) to extract raw option logits and partitions `calib_items` into an internal **70% fit / 30% validation** split (seeded by `calib_seed`) to prevent overfitting selection bias.
+   - Three post-hoc calibration modules defined in `helper.py` compete (an uncalibrated baseline is never selected, ensuring post-hoc calibration is always applied):
+     1. **`TemperatureScaling`** ($1$ parameter): Smoothly bounded scalar $T \in [0.5, 5.0]$ parameterized via sigmoid (`raw_temp`) so L-BFGS (`strong_wolfe`) never hits a zero-gradient clamp; preserves $100\%$ of top-1 rankings.
+     2. **`VectorScaling` (Platt / Vector Scaling)** ($2K$ parameters): Class-wise diagonal affine transform ($a \odot z + b$) that corrects class-frequency imbalance; eligible when option count $K$ is uniform and $N_{\text{fit}} \ge 2K$.
+     3. **`MatrixScaling`** ($K^2 + K$ parameters): Full linear transformation ($Wz + b$) initialized at the identity matrix $I$; eligible when option count $K$ is uniform and $N_{\text{fit}} \ge 2(K^2 + K)$ to prevent small-sample memorization.
+   - Each eligible candidate is fit on the 70% calibration fit split via `_fit_calibrator_lbfgs`—which minimizes a proper scoring composite (`nll_loss + brier_loss`) with sample-size-aware L2 regularization toward the identity transform ($T=1.0$ or $W=I, b=0$)—and scored on the unseen 30% validation split (`_evaluate_calibrated_logits`) using `val_mean_brier - val_ece` (with an accuracy-preservation guard).
+   - The winning strategy is then **refit on 100% of `calib_items`**, stored on `trainer.calibrator` for post-training evaluation, and paired with per-primitive scalar temperatures `[T_choice, T_score, T_noul]` for `rl_agent_config.json`.
 
 ---
 
 ### Stage 4: Evaluation, Checkpointing & Ablation (`training.py` & `run_ablation_comparison.py`)
 
 1. **Pre- and Post-Training Held-Out Evaluation (`RLTrainer.evaluate`)**:
-   - Before step 1 (`baseline`) and after post-hoc calibration (`final`), the trainer evaluates the model on the held-out **Test** split (`test_items`).
+   - Before step 1 (`baseline`, uncalibrated) and after post-hoc calibration (`final`, automatically applying `self.calibrator` to the raw logits), the trainer evaluates the model on the held-out **Test** split (`test_items`).
    - It computes six metrics:
      - **Accuracy** (top-1 exact match on `choice`/`noul`, or thresholded accuracy on `score`)
      - **Weighted Precision, Recall, and F1-Score**
      - **Mean Brier Score** (measuring overall probabilistic accuracy)
      - **Expected Calibration Error (ECE)** across 10 confidence bins (measuring the gap between predicted confidence and empirical accuracy)
-   - Both baseline and post-training metrics—along with improvement deltas—are printed to the console and saved to `<OUTPUT_DIR>/test_evaluation_metrics.json`.
+   - Baseline metrics, the `post_hoc_calibration` selection summary, and post-training `final` metrics—along with improvement deltas—are printed to the console and saved to `<OUTPUT_DIR>/test_evaluation_metrics.json`.
 
 2. **Rolling Checkpoints & Final Export (`helper.py`)**:
    - After each epoch, `save_rolling_checkpoint` writes the latest weights and tokenizer to `<OUTPUT_DIR>/checkpoint_latest/`.
-   - Once final evaluation completes, `save_final_model` exports the calibrated model weights (`model.safetensors`), encoder configuration, tokenizer, and `laya_config.json` to `<OUTPUT_DIR>/`, and automatically removes the temporary `checkpoint_latest/` folder to conserve disk space.
+   - Once post-hoc calibration completes, `save_final_model` exports the fine-tuned model weights (`model.safetensors`), the fitted post-hoc calibrator state (`post_hoc_calibrator.pt`), encoder configuration, tokenizer, and `rl_agent_config.json` (containing both `temperature` and the `post_hoc_calibration` summary) to `<OUTPUT_DIR>/`, and automatically removes the temporary `checkpoint_latest/` folder to conserve disk space.
 
 3. **Hyperparameter Sweep (`RLTrainer.hyperparameter_sweep`)**:
    - Passing `--sweep` to `main.py` runs multiple candidate configurations (`lr_head`, `group_size`, `ce_weight`, etc.) and ranks trials by a composite calibration-and-accuracy score on the test split.
