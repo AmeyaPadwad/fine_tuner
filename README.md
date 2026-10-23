@@ -32,7 +32,7 @@ Install the required dependencies from `requirements.txt`:
 pip install -r requirements.txt
 ```
 
-*(Note: To train on a CUDA GPU, install a CUDA-enabled build of PyTorch matching your system before or after installing `requirements.txt`.)*
+_(Note: To train on a CUDA GPU, install a CUDA-enabled build of PyTorch matching your system before or after installing `requirements.txt`.)_
 
 Optionally, copy `.env.example` to `.env` and set `HF_TOKEN` if you are downloading gated models or datasets from the Hugging Face Hub:
 
@@ -40,15 +40,17 @@ Optionally, copy `.env.example` to `.env` and set `HF_TOKEN` if you are download
 cp .env.example .env
 ```
 
-### 2. Running the Fine-Tuning Pipeline
+---
 
-The primary entry point is `main.py`. You can run it directly with the default configuration at the top of `main.py`:
+### Method 1: Running Directly via `main.py`
+
+You can run the pipeline directly through `main.py` using the default variables configured at the top of the file:
 
 ```bash
 python main.py
 ```
 
-Or override the model, dataset, subset size, column mapping, output directory, hardware device, or hyperparameter sweep via command-line arguments:
+Or pass CLI arguments to `main.py` to override the model, dataset, subset size, column mapping, output directory, device, or training hyperparameters:
 
 ```bash
 python main.py \
@@ -59,7 +61,7 @@ python main.py \
   --device cuda
 ```
 
-Using a custom column mapping via CLI:
+Using a custom column mapping with `main.py`:
 
 ```bash
 python main.py \
@@ -75,7 +77,76 @@ Running a multi-GPU distributed job with `torchrun`:
 torchrun --nproc_per_node=2 main.py --model OzLabs/typical-small --dataset lmsys/toxic-chat
 ```
 
-### 3. Running Ablation & Smoke Tests
+---
+
+### Method 2: Using an AI Agent (SDK + `rlcd-fine-tune` Skill)
+
+The repository also packages an installable Python SDK (`rlcd`), a single CLI command (`rlcd-fine-tune`), and an agent skill specification ([`skills/rlcd-fine-tune/SKILL.md`](./skills/rlcd-fine-tune/SKILL.md)) so an AI agent can autonomously fine-tune and calibrate any supported model and dataset.
+
+#### Step 1 — Register the SDK & Skill
+
+To install the editable package in your virtual environment and register [`skills/rlcd-fine-tune/SKILL.md`](./skills/rlcd-fine-tune/SKILL.md) in your agent platform's skills directory, either:
+
+- **Option A — Paste this prompt into your agent chat:**
+  ```text
+  Install this repo in editable mode (pip install -e . --no-deps) and copy skills/rlcd-fine-tune/SKILL.md into your skills directory so you can use the rlcd-fine-tune skill.
+  ```
+
+- **Option B — Run these commands manually in your terminal:**
+  ```bash
+  pip install -e . --no-deps
+
+  # For arkenOS / Optimus agents:
+  mkdir -p .optimus/skills/rlcd-fine-tune
+  cp skills/rlcd-fine-tune/SKILL.md .optimus/skills/rlcd-fine-tune/SKILL.md
+
+  # For Claude Code agents:
+  mkdir -p .claude/skills/rlcd-fine-tune
+  cp skills/rlcd-fine-tune/SKILL.md .claude/skills/rlcd-fine-tune/SKILL.md
+  ```
+
+#### Step 2 — Let the Agent Run `rlcd-fine-tune` or the Python SDK
+
+Once registered, prompt your agent in plain English:
+
+```text
+Fine-tune wfzyx/von on 500 examples of mteb/tweet_sentiment_extraction
+```
+
+The agent will automatically load [`skills/rlcd-fine-tune/SKILL.md`](./skills/rlcd-fine-tune/SKILL.md) and invoke either the CLI command or the Python SDK with any tunable hyperparameter:
+
+- **Single CLI Command (`rlcd-fine-tune`)**:
+  ```bash
+  rlcd-fine-tune \
+    --model wfzyx/von \
+    --dataset mteb/tweet_sentiment_extraction \
+    --subset 500 \
+    --epochs 2 \
+    --micro-batch-size 4 \
+    --lr-head 1e-4 \
+    --output-dir ./outputs/von_sentiment
+  ```
+
+- **Python SDK (`import rlcd`)**:
+  ```python
+  import rlcd
+
+  result = rlcd.fine_tune(
+      model_name="wfzyx/von",
+      dataset_name="mteb/tweet_sentiment_extraction",
+      dataset_subset=500,
+      epochs=2,
+      micro_batch_size=4,
+      output_dir="./outputs/von_sentiment",
+  )
+  print(result["metrics"])
+  ```
+
+For the 3-phase agent verification plan and empirical agent test report, see **[`tests/test_agent.md`](./tests/test_agent.md)** and **[`results/SDK_agent_testing_report.md`](./results/SDK_agent_testing_report.md)**.
+
+---
+
+### Running Ablation & Smoke Tests
 
 To run the 3-way ablation study comparing the untouched base model, standard SFT (cross-entropy only, no RLCD), and full RLCD Strategy 1:
 

@@ -12,11 +12,16 @@ All core pipeline modules live at the root of the repository for direct executio
 
 ```text
 .
-├── main.py                        # End-to-end CLI entry point (dataset load -> preprocess -> train -> evaluate)
+├── __init__.py                    # Top-level `rlcd` Python SDK exports (`fine_tune`, `RLTrainer`, `DecisionModel`, etc.)
+├── pyproject.toml                 # Package definition registering the `rlcd` SDK and `rlcd-fine-tune` CLI command
+├── main.py                        # End-to-end SDK & CLI entry point (dataset load -> preprocess -> train -> evaluate)
 ├── processing.py                  # Dataset- & model-agnostic schema resolution, tokenization, marker alignment & splitting
 ├── models.py                      # Unified DecisionModel router, model loaders (Laya, Von, OpenDecision, Typical, Decision1) & wrapper
 ├── training.py                    # RLTrainer, RLTrainingConfig, GRPO step, holdout-validated post-hoc calibration, and evaluation
 ├── helper.py                      # HF Hub auth, dataset loading, post-hoc calibrator modules (Temperature/Vector/Matrix), and model export
+├── skills/
+│   └── rlcd-fine-tune/
+│       └── SKILL.md               # Agent skill specification for autonomous RLCD fine-tuning via CLI or SDK
 ├── reward_strategies/             # Proper scoring rule reward implementations
 │   ├── brier.py                   # Vectorized negative Brier score reward (choice, noul, score)
 │   ├── RLCD Reward Strategies.md  # Mathematical notes on proper scoring rules for RLCD

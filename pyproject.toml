@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rlcd"
+version = "0.1.0"
+description = "Reinforcement Learning with Calibrated Decisions (RLCD) fine-tuning SDK and CLI for System One decision models."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "datasets>=2.18.0",
+    "huggingface_hub>=0.21.0",
+    "python-dotenv>=1.0.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "laya>=0.1.6",
+    "transformers>=4.48.0",
+    "safetensors",
+    "scikit-learn",
+    "torch",
+]
+
+[project.scripts]
+rlcd-fine-tune = "main:cli_entry"
+
+[tool.setuptools]
+py-modules = [
+    "main",
+    "models",
+    "processing",
+    "training",
+    "helper",
+    "run_ablation_comparison",
+    "run_post_hoc_calibration",
+    "smoke_tests",
+]
+packages = ["rlcd", "reward_strategies"]
+
+[tool.setuptools.package-dir]
+rlcd = "."
+reward_strategies = "reward_strategies"
